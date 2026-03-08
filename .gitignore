@@ -1,2 +1,32 @@
-Rag_system/.venv
-Rag_system/.env.example
+# Secrets
+.env
+*.env
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDEs
+.idea/
+.vscode/
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Logs & DBs
+*.log
+*.sqlite3
+
+# Test coverage
+.coverage
+htmlcov/
+
+# Local data (if needed)
+# data/

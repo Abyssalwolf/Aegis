@@ -4,7 +4,7 @@ celery_app = Celery(
     "aegis",
     broker="redis://localhost:6379/0",
     backend="redis://localhost:6379/0",
-    include=["agents.witness_agent", "orchestration.test_task"]
+    include=["agents.witness_agent", "agents.suspect_agent", "agents.cctv_agent", "agents.timeline_agent", "agents.supervisor_agent", "orchestration.tasks"]
 )
 
 celery_app.conf.update(

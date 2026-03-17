@@ -5,8 +5,11 @@ from pathlib import Path
 
 class Settings(BaseSettings):
     # --- Qdrant ---
+    # Set QDRANT_URL to a full URL (e.g. ngrok https URL) — overrides host+port when present
+    qdrant_url: str = Field(default="", env="QDRANT_URL")
     qdrant_host: str = Field(default="localhost", env="QDRANT_HOST")
     qdrant_port: int = Field(default=6333, env="QDRANT_PORT")
+    qdrant_api_key: str = Field(default="", env="QDRANT_API_KEY")
     qdrant_text_collection: str = Field(default="case_text_chunks", env="QDRANT_TEXT_COLLECTION")
     qdrant_image_collection: str = Field(default="case_image_chunks", env="QDRANT_IMAGE_COLLECTION")
 
@@ -35,6 +38,7 @@ class Settings(BaseSettings):
     # --- Storage ---
     document_store_path: Path = Field(default=Path("data/document_store.db"), env="DOCUMENT_STORE_PATH")
     bm25_index_path: Path = Field(default=Path("data/bm25_index.pkl"), env="BM25_INDEX_PATH")
+    rag_database_url: str = Field(default="", env="RAG_DATABASE_URL")
 
     # --- Ingestion ---
     docling_device: str = Field(default="cpu", env="DOCLING_DEVICE")

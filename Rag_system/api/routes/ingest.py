@@ -18,25 +18,30 @@ from pydantic import BaseModel
 from ingestion.pipeline import IngestionPipeline
 from stores.document_store import DocumentStore
 from config.settings import settings
+from api.shared_state import bm25, get_qdrant
 
 router = APIRouter()
 
 # Shared instances — loaded once per process
 _pipeline: Optional[IngestionPipeline] = None
-_doc_store: Optional[DocumentStore] = None
+_doc_store = None
 
 
 def get_pipeline() -> IngestionPipeline:
     global _pipeline
     if _pipeline is None:
-        _pipeline = IngestionPipeline()
+        _pipeline = IngestionPipeline(qdrant=get_qdrant())
     return _pipeline
 
 
-def get_doc_store() -> DocumentStore:
+def get_doc_store():
     global _doc_store
     if _doc_store is None:
-        _doc_store = DocumentStore()
+        if settings.rag_database_url:
+            from stores.pg_document_store import PgDocumentStore
+            _doc_store = PgDocumentStore(settings.rag_database_url)
+        else:
+            _doc_store = DocumentStore()
     return _doc_store
 
 
@@ -65,7 +70,6 @@ async def ingest_file(
     officer_id: Optional[str] = Form(default=None),
 ):
     """Upload and ingest a single PDF or image file."""
-    # Validate file type
     if file.content_type not in SUPPORTED_TYPES:
         raise HTTPException(
             status_code=415,
@@ -73,7 +77,6 @@ async def ingest_file(
                    f"Supported: PDF and common image formats.",
         )
 
-    # Check size
     content = await file.read()
     if len(content) > settings.max_upload_size_mb * 1024 * 1024:
         raise HTTPException(
@@ -81,7 +84,6 @@ async def ingest_file(
             detail=f"File too large. Max size: {settings.max_upload_size_mb}MB.",
         )
 
-    # Write to temp file (loaders expect file paths)
     suffix = Path(file.filename or "upload").suffix or ".pdf"
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp.write(content)
@@ -94,6 +96,14 @@ async def ingest_file(
             case_id=case_id,
             officer_id=officer_id,
         )
+
+        # Rebuild BM25 from all Qdrant texts so the new document is immediately searchable.
+        # Full rebuild (not case-scoped update) avoids duplicates in the in-memory index.
+        if record.chunk_count > 0:
+            all_pairs = pipeline.qdrant.get_all_texts()
+            if all_pairs:
+                bm25.build_index(all_pairs)
+
         return IngestResponse(
             document_id=record.document_id,
             filename=file.filename or "",
@@ -142,6 +152,15 @@ async def ingest_batch(
             })
         finally:
             os.unlink(tmp_path)
+
+    # Rebuild BM25 fully after batch ingestion
+    try:
+        pipeline = get_pipeline()
+        all_pairs = pipeline.qdrant.get_all_texts()
+        if all_pairs:
+            bm25.build_index(all_pairs)
+    except Exception:
+        pass
 
     return {"results": results, "total": len(results)}
 

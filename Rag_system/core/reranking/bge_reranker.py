@@ -51,12 +51,24 @@ class BGEReranker:
         """
         Rerank candidates by cross-encoder relevance score.
         Returns top_k results sorted by reranker score (descending).
+        Falls back to hybrid-retrieval ordering when the model cannot be loaded
+        (e.g. Windows page-file too small for safetensors mmap).
         """
         if not candidates:
             return []
 
         k = top_k or self.top_k
-        model = self._load()
+
+        try:
+            model = self._load()
+        except OSError as exc:
+            logger.warning(
+                f"Reranker model could not be loaded ({exc}). "
+                "Falling back to hybrid-retrieval ordering. "
+                "To fix: increase the Windows page file size (System Properties → "
+                "Advanced → Performance → Virtual Memory)."
+            )
+            return candidates[:k]
 
         # Pair query with each candidate text
         pairs = [[query, rc.chunk.text] for rc in candidates]

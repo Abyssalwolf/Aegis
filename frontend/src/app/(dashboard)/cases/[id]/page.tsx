@@ -5,11 +5,12 @@ import Link from 'next/link';
 import { CaseSettingsAction } from '@/components/officer/CaseSettingsAction';
 import { ManageOfficersAction } from '@/components/officer/ManageOfficersAction';
 
-export default async function CaseDetailPage({ params }: { params: { id: string } }) {
+export default async function CaseDetailPage({ params }: { params: Promise<{ id: string }> }) {
+    const { id } = await params;
     const token = await getAccessToken();
 
     // Fetch case details
-    const caseRes = await fetch(`http://localhost:8000/api/v1/cases/${params.id}`, {
+    const caseRes = await fetch(`http://localhost:8000/api/v1/cases/${id}`, {
         headers: { Authorization: `Bearer ${token}` },
         cache: 'no-store'
     });
@@ -37,14 +38,14 @@ export default async function CaseDetailPage({ params }: { params: { id: string 
     const isOwner = meData && meData.id === caseData.created_by;
 
     // Fetch documents
-    const docsRes = await fetch(`http://localhost:8000/api/v1/cases/${params.id}/documents`, {
+    const docsRes = await fetch(`http://localhost:8000/api/v1/cases/${id}/documents`, {
         headers: { Authorization: `Bearer ${token}` },
         cache: 'no-store'
     });
     const documents = docsRes.ok ? await docsRes.json() : [];
 
     // Fetch assigned officers
-    const assignedRes = await fetch(`http://localhost:8000/api/v1/cases/${params.id}/officers`, {
+    const assignedRes = await fetch(`http://localhost:8000/api/v1/cases/${id}/officers`, {
         headers: { Authorization: `Bearer ${token}` },
         cache: 'no-store'
     });

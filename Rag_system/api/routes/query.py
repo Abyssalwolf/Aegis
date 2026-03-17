@@ -10,26 +10,22 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from config.settings import settings
-from core.embeddings.local_embedder import LocalEmbedder
-from core.retrieval.bm25_retriever import BM25Retriever
 from core.retrieval.hybrid_retriever import HybridRetriever
 from core.reranking.bge_reranker import BGEReranker
 from core.generation.llm_client import OllamaClient
 from query.query_rewriter import QueryRewriter
 from query.context_builder import build_prompt, SYSTEM_PROMPT
-from stores.qdrant_store import QdrantStore
+from api.shared_state import bm25, get_qdrant, get_embedder, get_reranker
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # --- Shared singletons, lazy-loaded ---
-_embedder: Optional[LocalEmbedder] = None
-_qdrant: Optional[QdrantStore] = None
-_bm25: Optional[BM25Retriever] = None
+_embedder = None
+_qdrant = None
 _retriever: Optional[HybridRetriever] = None
 _reranker: Optional[BGEReranker] = None
 _rewriter: Optional[QueryRewriter] = None
@@ -37,15 +33,14 @@ _llm: Optional[OllamaClient] = None
 
 
 def _get_retriever() -> HybridRetriever:
-    global _embedder, _qdrant, _bm25, _retriever
+    global _embedder, _qdrant, _retriever
     if _retriever is None:
-        _embedder = LocalEmbedder()
-        _qdrant = QdrantStore()
-        _bm25 = BM25Retriever()
+        _embedder = get_embedder()  # shared singleton, pre-loaded at startup
+        _qdrant = get_qdrant()      # shared singleton — no second cold start
         _retriever = HybridRetriever(
             embedder=_embedder,
             qdrant=_qdrant,
-            bm25=_bm25,
+            bm25=bm25,
         )
     return _retriever
 
@@ -53,7 +48,7 @@ def _get_retriever() -> HybridRetriever:
 def _get_reranker() -> BGEReranker:
     global _reranker
     if _reranker is None:
-        _reranker = BGEReranker()
+        _reranker = get_reranker()  # shared singleton, pre-loaded at startup
     return _reranker
 
 
@@ -75,9 +70,9 @@ def _get_llm() -> OllamaClient:
 
 class QueryRequest(BaseModel):
     query: str
-    case_id: Optional[str] = None       # Scope retrieval to a specific case
+    case_id: Optional[str] = None
     top_k: int = settings.reranker_top_k
-    rewrite: bool = True                # Enable/disable query rewriting
+    rewrite: bool = True
     stream: bool = False
 
 
@@ -142,7 +137,7 @@ async def query(request: QueryRequest):
     # 3. Reranking
     reranker = _get_reranker()
     reranked = reranker.rerank(
-        query=request.query,    # Rerank against original query for precision
+        query=request.query,
         candidates=candidates,
         top_k=request.top_k,
     )
@@ -156,7 +151,7 @@ async def query(request: QueryRequest):
     answer = llm.generate(
         prompt=prompt,
         system=SYSTEM_PROMPT,
-        temperature=0.1,    # Low temp — factual, grounded answers only
+        temperature=0.1,
         max_tokens=1024,
     )
 

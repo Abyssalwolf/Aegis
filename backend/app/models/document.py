@@ -13,6 +13,9 @@ class Document(Base):
     uploaded_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("user.id"), index=True)
     document_type: Mapped[str] = mapped_column(String)
     file_path: Mapped[str] = mapped_column(String)
+    filename: Mapped[str | None] = mapped_column(String, nullable=True)
+    rag_document_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    ingest_status: Mapped[str] = mapped_column(String, default="pending", server_default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     case = relationship("Case", back_populates="documents")

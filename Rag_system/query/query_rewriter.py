@@ -15,6 +15,9 @@ import httpx
 
 from config.settings import settings
 
+# Strip <think>...</think> blocks from Qwen3-style reasoning models.
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
 logger = logging.getLogger(__name__)
 
 REWRITE_PROMPT = """\
@@ -77,8 +80,10 @@ class QueryRewriter:
                     "model": self.model,
                     "prompt": prompt,
                     "stream": False,
+                    # Disable Qwen3.x reasoning chain — we only need the rewrites.
+                    "think": False,
                     "options": {
-                        "temperature": 0.3,     # Low temp for focused rewrites
+                        "temperature": 0.3,
                         "num_predict": 200,
                     },
                 },
@@ -86,6 +91,8 @@ class QueryRewriter:
             )
             response.raise_for_status()
             raw_text = response.json().get("response", "")
+            # Strip any residual thinking blocks before parsing.
+            raw_text = _THINK_RE.sub("", raw_text).strip()
             return self._parse_rewrites(raw_text)
 
         except httpx.ConnectError:

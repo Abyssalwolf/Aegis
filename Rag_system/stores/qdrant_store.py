@@ -32,10 +32,16 @@ logger = logging.getLogger(__name__)
 class QdrantStore:
 
     def __init__(self):
-        self.client = QdrantClient(
-            host=settings.qdrant_host,
-            port=settings.qdrant_port,
-        )
+        if settings.qdrant_url:
+            # Full URL mode — used for ngrok tunnels or cloud-hosted Qdrant.
+            # timeout=120 allows for the slow first-connection latency typical of ngrok.
+            kwargs: dict = {"url": settings.qdrant_url, "timeout": 120}
+        else:
+            # Direct host:port mode — used for local Docker or LAN server
+            kwargs = {"host": settings.qdrant_host, "port": settings.qdrant_port, "timeout": 60}
+        if settings.qdrant_api_key:
+            kwargs["api_key"] = settings.qdrant_api_key
+        self.client = QdrantClient(**kwargs)
         self._ensure_collections()
 
     def _collection_for(self, chunk_type: ChunkType) -> str:
@@ -45,11 +51,12 @@ class QdrantStore:
 
     def _ensure_collections(self) -> None:
         """Create collections if they don't exist."""
+        # Fetch the collection list once to avoid multiple round-trips over slow links.
+        existing = {c.name for c in self.client.get_collections().collections}
         for collection_name in [
             settings.qdrant_text_collection,
             settings.qdrant_image_collection,
         ]:
-            existing = [c.name for c in self.client.get_collections().collections]
             if collection_name not in existing:
                 logger.info(f"Creating Qdrant collection: {collection_name}")
                 self.client.create_collection(

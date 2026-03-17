@@ -14,8 +14,11 @@ class DocumentInDBBase(DocumentBase):
     id: UUID
     case_id: UUID
     uploaded_by: UUID
+    filename: Optional[str] = None
+    rag_document_id: Optional[str] = None
+    ingest_status: str = "pending"
     created_at: datetime
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 class Document(DocumentInDBBase):

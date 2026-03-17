@@ -29,20 +29,29 @@ from core.documents.models import (
 )
 from stores.qdrant_store import QdrantStore
 from stores.document_store import DocumentStore
+from stores.pg_document_store import PgDocumentStore
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
 
 class IngestionPipeline:
 
-    def __init__(self):
+    def __init__(self, qdrant: Optional[QdrantStore] = None):
         self.pdf_loader = PDFLoader()
         self.image_loader = ImageLoader()
         self.cleaner = TextCleaner()
         self.embedder = LocalEmbedder()
         self.chunker = SemanticChunker(embedder=self.embedder)
-        self.qdrant = QdrantStore()
-        self.doc_store = DocumentStore()
+        # Accept an externally-provided QdrantStore so the caller can share one
+        # client instance across the whole process (avoids repeated TCP cold starts).
+        self.qdrant = qdrant if qdrant is not None else QdrantStore()
+        if settings.rag_database_url:
+            logger.info("Using PostgreSQL document store.")
+            self.doc_store = PgDocumentStore(settings.rag_database_url)
+        else:
+            logger.info("RAG_DATABASE_URL not set — falling back to SQLite document store.")
+            self.doc_store = DocumentStore()
 
     def ingest_file(
         self,

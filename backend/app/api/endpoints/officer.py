@@ -1,5 +1,6 @@
 from typing import Any, List
-from fastapi import APIRouter, Depends
+from uuid import UUID
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import or_
@@ -45,3 +46,17 @@ async def read_officers_list(
     query = select(User).filter(User.role == "OFFICER", User.is_active == True)
     result = await db.execute(query)
     return result.scalars().all()
+
+
+@router.get("/{officer_id}", response_model=UserSchema)
+async def read_officer_by_id(
+    officer_id: UUID,
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> Any:
+    """Get any officer's basic profile — accessible to all authenticated users."""
+    result = await db.execute(select(User).filter(User.id == officer_id, User.role == "OFFICER"))
+    officer = result.scalars().first()
+    if not officer:
+        raise HTTPException(status_code=404, detail="Officer not found")
+    return officer

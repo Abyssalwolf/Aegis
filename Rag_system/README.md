@@ -28,6 +28,8 @@ Designed for: Intel i7 1260P, 16GB RAM, integrated graphics (CPU-only).
 ```bash
 # Docker (for Qdrant)
 docker run -d -p 6333:6333 --name qdrant qdrant/qdrant
+# If already existing -
+docker start qdrant
 
 # Ollama
 curl -fsSL https://ollama.ai/install.sh | sh

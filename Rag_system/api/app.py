@@ -15,6 +15,7 @@ from api.routes.ingest import router as ingest_router
 from api.routes.query import router as query_router
 from api import shared_state
 from config.settings import settings
+from api.routes.agents import router as agents_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -79,7 +80,7 @@ app.add_middleware(
 
 app.include_router(ingest_router, prefix="/ingest", tags=["Ingestion"])
 app.include_router(query_router, prefix="/query", tags=["Query"])
-
+app.include_router(agents_router, prefix="/agents", tags=["Agents"])
 
 @app.get("/health")
 def health():

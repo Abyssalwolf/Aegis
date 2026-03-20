@@ -1,0 +1,61 @@
+FORENSIC SCIENCE LABORATORY REPORT
+===================================
+Lab Reference: FSL-TVM-2024-0892
+Case No: CR-2024-001
+Police Station: Thiruvananthapuram Central
+Requesting Officer: SI Vijayan P.
+Date of Receipt of Exhibits: 11-January-2024
+Date of Report: 16-January-2024
+
+EXHIBITS RECEIVED
+-----------------
+1. MO-001 — Iron rod (65cm, blood stained) — sealed packet
+2. SOC-001 to SOC-004 — Blood samples from scene
+3. MO-002 — Torn blue fabric piece
+4. Fingerprint lifts from metal rod (3 impressions)
+5. Post mortem blood sample of deceased Suresh Pillai
+
+EXAMINATION AND FINDINGS
+------------------------
+
+1. METAL ROD (MO-001)
+   - Blood group detected: B Positive
+   - DNA extracted from blood — Sample FSL-DNA-001
+   - Hair strands found (2 nos.) — Sample FSL-HAIR-001
+   - Fingerprint examination: 3 impressions — 2 partial, 1 clear
+   - Clear impression matched with fingerprint of accused Mohan Das
+     (comparison with specimen fingerprints provided by investigating officer)
+
+2. BLOOD SAMPLES FROM SCENE (SOC-001 to SOC-004)
+   - Blood group: B Positive
+   - DNA profile matches with deceased Suresh Pillai
+   - No other DNA profiles detected
+
+3. TORN FABRIC (MO-002)
+   - Blue cotton fabric
+   - Matched with shirt seized from accused Mohan Das at time of arrest
+   - Fibre analysis confirms same material composition
+
+4. DNA ANALYSIS
+   - DNA from rod (FSL-DNA-001) matches DNA of deceased Suresh Pillai
+   - No DNA of third party detected
+
+5. POST MORTEM FINDINGS (Dr. Anitha Nair, GMC Thiruvananthapuram)
+   - Cause of death: Blunt force trauma to parietal region of skull
+   - Depressed fracture of skull — consistent with iron rod MO-001
+   - Time of death estimated: 21:00 hrs to 23:00 hrs on 08-January-2024
+
+CONCLUSION
+----------
+1. The iron rod MO-001 is the weapon used in the commission of the offence.
+2. Fingerprints on the rod match accused Mohan Das.
+3. Blood on rod matches deceased Suresh Pillai.
+4. Fabric MO-002 matches clothing of accused.
+5. Forensic evidence strongly links accused Mohan Das to the offence.
+
+Examined by: Dr. Suresh Babu, Senior Scientific Officer
+             Ms. Rekha Menon, Fingerprint Expert
+Approved by: Director, FSL Thiruvananthapuram
+
+Date: 16-January-2024
+Seal: [FSL Official Seal]

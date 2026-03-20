@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     api_port: int = Field(default=8080, env="API_PORT")
     max_upload_size_mb: int = Field(default=50, env="MAX_UPLOAD_SIZE_MB")
 
+    memory_dir: str = Field(default="data/memory_store", env="MEMORY_DIR")
+    upload_dir: str = Field(default="data/uploads", env="UPLOAD_DIR")
+    
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

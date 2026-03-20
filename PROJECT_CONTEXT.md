@@ -302,7 +302,7 @@ User query
                          — fuses all results with Reciprocal Rank Fusion (RRF) → top-50
   → BGEReranker          — cross-encoder reranking of top-50 → top-5
   → context_builder      — assembles cited prompt with [Source N] labels (2048-token window)
-  → OllamaClient         — generates answer (Qwen2.5:3b, streaming supported)
+  → OllamaClient         — generates answer (Qwen3.5:2b, streaming supported)
   → QueryResponse        — answer text + list of source references
 ```
 
@@ -604,7 +604,7 @@ CHUNK_MIN_TOKENS=50
 SEMANTIC_SIMILARITY_THRESHOLD=0.3
 
 OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=qwen2.5:3b
+OLLAMA_MODEL=qwen3.5:2b
 QUERY_REWRITE_COUNT=2
 
 DOCUMENT_STORE_PATH=data/document_store.db
@@ -640,7 +640,7 @@ Backend FastAPI (port 8000)
                ├──→ Qdrant (port 6333)        — dense vector search
                ├──→ SQLite data/document_store.db — document status tracking
                ├──→ data/bm25_index.pkl        — sparse BM25 index
-               └──→ Ollama (port 11434)        — Qwen2.5:3b LLM
+               └──→ Ollama (port 11434)        — Qwen3.5:2b LLM
 
 Celery Workers (async, separate process)
   ├── Redis (port 6379)  — task broker + result backend + Blackboard store

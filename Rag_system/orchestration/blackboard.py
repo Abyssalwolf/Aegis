@@ -1,8 +1,8 @@
 import json
 from datetime import datetime
+from typing import Iterator
 import redis
 
-# Redis client (simple, local)
 redis_client = redis.Redis(
     host="localhost",
     port=6379,
@@ -16,9 +16,7 @@ def _now():
 
 
 def post_message(case_id: int, agent: str, content: str, confidence: float):
-    """
-    Post an observation message to the blackboard
-    """
+    """Post an observation to the blackboard."""
     message = {
         "agent": agent,
         "type": "observation",
@@ -26,15 +24,14 @@ def post_message(case_id: int, agent: str, content: str, confidence: float):
         "confidence": confidence,
         "timestamp": _now()
     }
-
     key = f"case:{case_id}:messages"
     redis_client.rpush(key, json.dumps(message))
+    # also broadcast live so SSE picks it up
+    redis_client.publish(f"blackboard:{case_id}", json.dumps(message))
 
 
 def post_anomaly(case_id: int, agent: str, content: str, confidence: float):
-    """
-    Post an anomaly message to the blackboard
-    """
+    """Post an anomaly to the blackboard."""
     anomaly = {
         "agent": agent,
         "type": "anomaly",
@@ -42,37 +39,147 @@ def post_anomaly(case_id: int, agent: str, content: str, confidence: float):
         "confidence": confidence,
         "timestamp": _now()
     }
-
     key = f"case:{case_id}:anomalies"
     redis_client.rpush(key, json.dumps(anomaly))
+    redis_client.publish(f"blackboard:{case_id}", json.dumps(anomaly))
+
+
+def post_finding(case_id: int, agent: str, file_type: str, payload: dict):
+    """
+    Called by document agents (FIR, Forensic, Statement, etc.)
+    after analysing an uploaded file.
+    Stores structured finding AND bridges into messages/anomalies
+    so everything stays in one unified feed.
+    """
+    finding = {
+        "agent": agent,
+        "type": "finding",
+        "file_type": file_type,
+        "content": payload.get("summary", ""),
+        "confidence": 0.9,
+        "timestamp": _now(),
+        "key_entities": payload.get("key_entities", []),
+        "inconsistencies": payload.get("inconsistencies", []),
+        "insights": payload.get("insights", []),
+        "rag_queries_made": payload.get("rag_queries_made", []),
+        "raw_extracted": payload.get("raw_extracted", {}),
+    }
+
+    # persist to findings list
+    key = f"case:{case_id}:findings"
+    redis_client.rpush(key, json.dumps(finding))
+    redis_client.expire(key, 60 * 60 * 24 * 7)
+
+    # broadcast live
+    redis_client.publish(f"blackboard:{case_id}", json.dumps(finding))
+
+    # bridge into existing channels
+    post_message(case_id, agent, finding["content"], finding["confidence"])
+    for issue in finding["inconsistencies"]:
+        post_anomaly(case_id, agent, issue, 0.85)
+
+
+def post_insight(case_id: int, agent: str, content: str, confidence: float):
+    """Post a cross-agent insight from the supervisor."""
+    insight = {
+        "agent": agent,
+        "type": "insight",
+        "content": content,
+        "confidence": confidence,
+        "timestamp": _now()
+    }
+    key = f"case:{case_id}:insights"
+    redis_client.rpush(key, json.dumps(insight))
+    redis_client.publish(f"blackboard:{case_id}", json.dumps(insight))
 
 
 def read_messages(case_id: int):
-    """
-    Read all observation messages
-    """
     key = f"case:{case_id}:messages"
-    raw = redis_client.lrange(key, 0, -1)
-    return [json.loads(msg) for msg in raw]
+    return [json.loads(m) for m in redis_client.lrange(key, 0, -1)]
 
 
 def read_anomalies(case_id: int):
-    """
-    Read all anomaly messages
-    """
     key = f"case:{case_id}:anomalies"
-    raw = redis_client.lrange(key, 0, -1)
-    return [json.loads(msg) for msg in raw]
+    return [json.loads(m) for m in redis_client.lrange(key, 0, -1)]
+
+
+def read_findings(case_id: int):
+    key = f"case:{case_id}:findings"
+    return [json.loads(m) for m in redis_client.lrange(key, 0, -1)]
+
+
+def read_insights(case_id: int):
+    key = f"case:{case_id}:insights"
+    return [json.loads(m) for m in redis_client.lrange(key, 0, -1)]
+
+
+def read_all(case_id: int) -> dict:
+    """Read everything from the blackboard — used by dashboard."""
+    return {
+        "messages":  read_messages(case_id),
+        "anomalies": read_anomalies(case_id),
+        "findings":  read_findings(case_id),
+        "insights":  read_insights(case_id),
+    }
 
 
 def set_case_status(case_id: int, status: str):
-    """
-    Set case analysis status (running / completed)
-    """
-    key = f"case:{case_id}:status"
-    redis_client.set(key, status)
+    redis_client.set(f"case:{case_id}:status", status)
 
 
 def get_case_status(case_id: int):
-    key = f"case:{case_id}:status"
-    return redis_client.get(key)
+    return redis_client.get(f"case:{case_id}:status")
+
+
+def subscribe_to_case(case_id: int) -> Iterator[dict]:
+    """
+    Live generator — yields every message published to the blackboard channel.
+    Used by the SSE endpoint so the dashboard updates in real time.
+    Run in a background thread.
+    """
+    r = redis.Redis(host="localhost", port=6379, db=0, decode_responses=True)
+    ps = r.pubsub()
+    ps.subscribe(f"blackboard:{case_id}")
+    for raw in ps.listen():
+        if raw["type"] != "message":
+            continue
+        try:
+            yield json.loads(raw["data"])
+        except Exception:
+            continue
+
+
+def format_brief(case_id: int) -> str:
+    """
+    Markdown summary of the full blackboard for a case.
+    Fed to the supervisor agent as context.
+    """
+    lines = [f"# Blackboard — Case {case_id}\n"]
+
+    findings = read_findings(case_id)
+    if findings:
+        lines.append("## Document Findings\n")
+        for f in findings:
+            lines.append(f"### [{f['agent']}] {f['file_type']}  —  {f['timestamp']}")
+            lines.append(f"{f['content']}\n")
+            if f.get("key_entities"):
+                lines.append("**Entities:** " + ", ".join(f["key_entities"]))
+            if f.get("insights"):
+                lines.extend(f"- {i}" for i in f["insights"])
+            if f.get("inconsistencies"):
+                lines.extend(f"- ⚠ {i}" for i in f["inconsistencies"])
+            lines.append("---")
+
+    messages = read_messages(case_id)
+    if messages:
+        lines.append("\n## Observations\n")
+        for m in messages:
+            lines.append(f"- [{m['agent']}] {m['content']}  (conf: {m['confidence']})")
+
+    anomalies = read_anomalies(case_id)
+    if anomalies:
+        lines.append("\n## Anomalies\n")
+        for a in anomalies:
+            lines.append(f"- ⚠ [{a['agent']}] {a['content']}  (conf: {a['confidence']})")
+
+    return "\n".join(lines)

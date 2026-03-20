@@ -119,14 +119,24 @@ def classify_by_llm(text: str) -> tuple[FILE_TYPE | None, float, str]:
     Falls back to ("fir", 0.5, "unknown") on error.
     """
     import json
-    from langchain_openai import ChatOpenAI
+    from langchain_ollama import ChatOllama
     from langchain_core.messages import HumanMessage
+    from config.settings import settings
 
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    llm = ChatOllama(
+        base_url=settings.ollama_base_url,
+        model=settings.ollama_model,
+        temperature=0,
+    )
     prompt = _LLM_PROMPT.format(text=text[:2000])
     try:
         response = llm.invoke([HumanMessage(content=prompt)])
-        data = json.loads(response.content)
+        content = response.content.strip()
+        if content.startswith("```"):
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
+        data = json.loads(content.strip())
         return data.get("file_type"), data.get("confidence", 0.7), data.get("reason", "")
     except Exception:
         return None, 0.0, "classification failed"

@@ -1,9 +1,26 @@
+import sys
+import os
+
+# Ensure the Rag_system project root is on sys.path so packages like
+# `ingestion`, `core`, `agents` are importable by Celery workers.
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
 import logging
 from pathlib import Path
 from typing import Any
 
+# All project imports at module level — resolved once when Celery loads this
+# module, at which point sys.path above is already applied.
+from ingestion.extractor import extract_text
+from core.documents.classifier import classify_document
+from core.retrieval.agent_retriever import ingest_document
+from agents.supervisor import SupervisorAgent
 from orchestration.celery_app import celery_app
 from orchestration.blackboard import set_case_status, post_insight
+from orchestration.graph.graph import investigation_graph
+from orchestration.graph.state import InvestigationState
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +38,6 @@ def process_document(self, case_id: int, file_path: str,
     """
     try:
         set_case_status(case_id, "running")
-
-        from ingestion.extractor import extract_text
-        from core.documents.classifier import classify_document
-        from core.retrieval.agent_retriever import ingest_document
-        from orchestration.graph.graph import investigation_graph
-        from orchestration.graph.state import InvestigationState
 
         file_content = extract_text(file_path)
         if not file_content.strip():
@@ -77,9 +88,6 @@ def run_supervisor(case_id: int) -> dict[str, Any]:
     Call this after all documents for a case have been uploaded
     or to refresh the consolidated report on demand.
     """
-    from agents.supervisor import SupervisorAgent
-    from orchestration.graph.state import InvestigationState
-
     result = SupervisorAgent()(InvestigationState(case_id=str(case_id)))
 
     for issue in result.get("cross_inconsistencies", []):
@@ -92,6 +100,4 @@ def run_supervisor(case_id: int) -> dict[str, Any]:
 @celery_app.task
 def classify_only(file_path: str, stated_type: str | None = None) -> dict[str, Any]:
     """Classify a file without running the full pipeline — for UI preview."""
-    from ingestion.extractor import extract_text
-    from core.documents.classifier import classify_document
-    return classify_document(text=extract_text(file_path), stated_type=stated_type)
+    return classify_document(text=extract_text(file_path), stated_type=stated_type)

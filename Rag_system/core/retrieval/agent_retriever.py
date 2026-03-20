@@ -1,15 +1,24 @@
 """
 agent_retriever.py — RAG wrapper for document agents.
 
-Uses your existing Qdrant store and embedder (via shared_state)
-instead of ChromaDB. Each case gets its own Qdrant collection prefix.
+Uses your existing IngestionPipeline (now supports .txt files)
+and HybridRetriever. Works in both FastAPI and Celery processes.
 """
 
 from __future__ import annotations
 import logging
+import os
+import tempfile
 from typing import Any
 
+from config.settings import settings
+
 logger = logging.getLogger(__name__)
+
+
+def _get_qdrant():
+    from stores.qdrant_store import QdrantStore
+    return QdrantStore()
 
 
 def ingest_document(
@@ -19,38 +28,29 @@ def ingest_document(
     metadata: dict[str, Any] | None = None,
 ) -> None:
     """
-    Chunk and embed a document into your existing Qdrant store.
-    Reuses your existing ingestion pipeline so it lands in the same
-    collection as everything else — no separate store needed.
+    Ingest extracted text into Qdrant via the existing IngestionPipeline.
+    Writes to a temp .txt file so the pipeline can process it.
     """
     try:
-        from api.shared_state import get_qdrant, get_embedder
-        from core.documents.chunker import chunk_text
+        from ingestion.pipeline import IngestionPipeline
 
-        embedder = get_embedder()
-        qdrant = get_qdrant()
+        pipeline = IngestionPipeline(qdrant=_get_qdrant())
 
-        chunks = chunk_text(text)
-        if not chunks:
-            logger.warning(f"[{case_id}] No chunks produced for doc_id={doc_id}")
-            return
+        with tempfile.NamedTemporaryFile(
+            suffix=".txt", delete=False, mode="w", encoding="utf-8"
+        ) as tmp:
+            tmp.write(text)
+            tmp_path = tmp.name
 
-        for i, chunk in enumerate(chunks):
-            chunk_id = f"{doc_id}_chunk_{i}"
-            vector = embedder.embed(chunk)
-            qdrant.upsert(
-                chunk_id=chunk_id,
-                vector=vector,
-                text=chunk,
-                metadata={
-                    **(metadata or {}),
-                    "case_id": case_id,
-                    "doc_id": doc_id,
-                    "chunk_index": i,
-                },
+        try:
+            pipeline.ingest_file(
+                file_path=tmp_path,
+                case_id=case_id,
+                officer_id=None,
             )
-
-        logger.info(f"[{case_id}] Ingested {len(chunks)} chunks for {doc_id}")
+            logger.info(f"[{case_id}] Ingested document {doc_id}")
+        finally:
+            os.unlink(tmp_path)
 
     except Exception as e:
         logger.error(f"[{case_id}] Ingestion failed: {e}", exc_info=True)
@@ -58,28 +58,40 @@ def ingest_document(
 
 def query_rag(case_id: str, question: str, n_results: int = 5) -> str:
     """
-    Query your existing Qdrant store filtered by case_id.
+    Query Qdrant for relevant chunks filtered by case_id.
     Returns concatenated context string for the agent LLM call.
     """
     try:
-        from api.shared_state import get_qdrant, get_embedder
+        from core.retrieval.hybrid_retriever import HybridRetriever
+        from core.retrieval.bm25_retriever import BM25Retriever
+        from core.embeddings.local_embedder import LocalEmbedder
 
-        embedder = get_embedder()
-        qdrant = get_qdrant()
+        embedder = LocalEmbedder()
+        qdrant = _get_qdrant()
+        bm25 = BM25Retriever()
 
-        vector = embedder.embed(question)
-        results = qdrant.search(
-            vector=vector,
+        pairs = qdrant.get_all_texts()
+        if pairs:
+            bm25.build_index(pairs)
+
+        retriever = HybridRetriever(
+            embedder=embedder,
+            qdrant=qdrant,
+            bm25=bm25,
+        )
+
+        results = retriever.search_multi_query(
+            queries=[question],
             top_k=n_results,
-            filter={"case_id": case_id},
+            case_id=case_id,
         )
 
         if not results:
             return ""
 
         context_parts = [
-            f"[Result {i+1}]\n{r.text if hasattr(r, 'text') else str(r)}"
-            for i, r in enumerate(results)
+            f"[Result {i+1}]\n{r.chunk.text if hasattr(r, 'chunk') else str(r)}"
+            for i, r in enumerate(results[:n_results])
         ]
         return "\n\n".join(context_parts)
 

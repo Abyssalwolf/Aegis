@@ -2,12 +2,15 @@
 Ingestion pipeline.
 Orchestrates: load → clean → chunk → embed → store (Qdrant + SQLite).
 
-Handles both PDF and image files. For PDFs, also processes any
+Handles PDF, image, and plain text files. For PDFs, also processes any
 embedded images found within the document.
-
-Memory note: embedder is loaded for the duration of ingestion then
-explicitly unloaded to free RAM before the API serves queries.
 """
+
+import sys
+import os
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 import logging
 from pathlib import Path
@@ -43,8 +46,6 @@ class IngestionPipeline:
         self.cleaner = TextCleaner()
         self.embedder = LocalEmbedder()
         self.chunker = SemanticChunker(embedder=self.embedder)
-        # Accept an externally-provided QdrantStore so the caller can share one
-        # client instance across the whole process (avoids repeated TCP cold starts).
         self.qdrant = qdrant if qdrant is not None else QdrantStore()
         if settings.rag_database_url:
             logger.info("Using PostgreSQL document store.")
@@ -60,10 +61,6 @@ class IngestionPipeline:
         officer_id: Optional[str] = None,
         skip_if_exists: bool = True,
     ) -> DocumentRecord:
-        """
-        Ingest a single PDF or image file.
-        Returns the DocumentRecord with final status.
-        """
         path = Path(file_path)
         suffix = path.suffix.lower()
 
@@ -75,11 +72,13 @@ class IngestionPipeline:
             if existing:
                 return existing[0]
 
-        # Determine file type
+        # Determine file type — added txt/md support
         if suffix == ".pdf":
             file_type = "pdf"
         elif suffix in {".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".webp"}:
             file_type = "image"
+        elif suffix in {".txt", ".md"}:
+            file_type = "text"
         else:
             raise ValueError(f"Unsupported file type: {suffix}")
 
@@ -99,12 +98,13 @@ class IngestionPipeline:
 
             if file_type == "pdf":
                 chunks = self._process_pdf(path, record.document_id, case_id)
-                # Update page count
                 record.metadata.page_count = getattr(
                     self._last_pdf_result, "page_count", None
                 )
-            else:
+            elif file_type == "image":
                 chunks = self._process_image(path, record.document_id, case_id)
+            elif file_type == "text":
+                chunks = self._process_text(path, record.document_id, case_id)
 
             # Embed all chunks in one batch pass
             chunks = self._embed_chunks(chunks)
@@ -122,8 +122,7 @@ class IngestionPipeline:
             record.chunk_count = len(chunks)
 
             logger.info(
-                f"Ingestion complete: '{path.name}' → "
-                f"{len(chunks)} chunks stored."
+                f"Ingestion complete: '{path.name}' → {len(chunks)} chunks stored."
             )
 
         except Exception as e:
@@ -145,10 +144,9 @@ class IngestionPipeline:
         officer_id: Optional[str] = None,
         recursive: bool = False,
     ) -> list[DocumentRecord]:
-        """Ingest all PDFs and images in a directory."""
         directory = Path(directory)
         pattern = "**/*" if recursive else "*"
-        supported = {".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp"}
+        supported = {".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".txt", ".md"}
 
         files = [f for f in directory.glob(pattern) if f.suffix.lower() in supported]
         logger.info(f"Found {len(files)} files to ingest in {directory}.")
@@ -171,7 +169,6 @@ class IngestionPipeline:
         self._last_pdf_result = result
         chunks: list[Chunk] = []
 
-        # --- Main text ---
         clean_text = self.cleaner.clean(result.text)
         if clean_text:
             text_chunks = self._text_to_chunks(
@@ -183,7 +180,6 @@ class IngestionPipeline:
             )
             chunks.extend(text_chunks)
 
-        # --- Embedded images ---
         for i, (img_bytes, page_no) in enumerate(
             zip(result.images, result.image_page_numbers)
         ):
@@ -227,6 +223,22 @@ class IngestionPipeline:
                 )
 
         return chunks
+
+    def _process_text(
+        self, path: Path, document_id: str, case_id: Optional[str]
+    ) -> list[Chunk]:
+        """Process plain text and markdown files."""
+        text = path.read_text(encoding="utf-8", errors="replace")
+        clean_text = self.cleaner.clean(text)
+        if not clean_text:
+            return []
+        return self._text_to_chunks(
+            clean_text,
+            document_id=document_id,
+            chunk_type=ChunkType.TEXT,
+            case_id=case_id,
+            source_path=str(path),
+        )
 
     def _text_to_chunks(
         self,

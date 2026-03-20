@@ -15,7 +15,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from config.settings import settings
 from orchestration.graph.state import BlackboardMessage, InvestigationState
-from core.documents.memory_manager import (
+from core.documents.manager import (
     read_full_memory,
     update_memory,
     check_inconsistencies,

@@ -1,7 +1,7 @@
 """
 Query rewriter.
-Uses a local Ollama LLM to generate N alternative phrasings of the
-user's query to improve retrieval recall via multi-query expansion.
+Uses the LLM (OpenAI-compatible API) to generate N alternative phrasings
+of the user's query to improve retrieval recall via multi-query expansion.
 
 The original query is always included, so retrieval always covers
 the user's exact intent.
@@ -9,14 +9,9 @@ the user's exact intent.
 
 import logging
 import re
-from typing import Optional
 
-import httpx
-
+from core.generation.llm_client import LLMClient
 from config.settings import settings
-
-# Strip <think>...</think> blocks from Qwen3-style reasoning models.
-_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 logger = logging.getLogger(__name__)
 
@@ -42,23 +37,20 @@ class QueryRewriter:
 
     def __init__(
         self,
-        ollama_url: str = settings.ollama_base_url,
-        model: str = settings.ollama_model,
+        llm: LLMClient | None = None,
         n_rewrites: int = settings.query_rewrite_count,
     ):
-        self.ollama_url = ollama_url
-        self.model = model
+        self.llm = llm or LLMClient()
         self.n_rewrites = n_rewrites
 
     def rewrite(self, query: str) -> list[str]:
         """
         Returns a list of query variants: [original] + [rewrites].
-        Falls back gracefully to [original] if Ollama is unavailable.
+        Falls back gracefully to [original] if the LLM is unavailable.
         """
-        rewrites = self._call_ollama(query)
+        rewrites = self._call_llm(query)
         all_queries = [query] + rewrites
 
-        # Deduplicate while preserving order
         seen: set[str] = set()
         unique: list[str] = []
         for q in all_queries:
@@ -70,34 +62,17 @@ class QueryRewriter:
         logger.info(f"Query rewriting: 1 original → {len(unique)} total variants.")
         return unique
 
-    def _call_ollama(self, query: str) -> list[str]:
+    def _call_llm(self, query: str) -> list[str]:
         prompt = REWRITE_PROMPT.format(n=self.n_rewrites, query=query)
 
         try:
-            response = httpx.post(
-                f"{self.ollama_url}/api/generate",
-                json={
-                    "model": self.model,
-                    "prompt": prompt,
-                    "stream": False,
-                    # Disable Qwen3.x reasoning chain — we only need the rewrites.
-                    "think": False,
-                    "options": {
-                        "temperature": 0.3,
-                        "num_predict": 200,
-                    },
-                },
-                timeout=30.0,
+            raw_text = self.llm.generate(
+                prompt=prompt,
+                temperature=0.3,
+                max_tokens=200,
             )
-            response.raise_for_status()
-            raw_text = response.json().get("response", "")
-            # Strip any residual thinking blocks before parsing.
-            raw_text = _THINK_RE.sub("", raw_text).strip()
             return self._parse_rewrites(raw_text)
 
-        except httpx.ConnectError:
-            logger.warning("Ollama not reachable. Proceeding with original query only.")
-            return []
         except Exception as e:
             logger.warning(f"Query rewriting failed: {e}. Using original query.")
             return []
@@ -108,7 +83,6 @@ class QueryRewriter:
         rewrites: list[str] = []
 
         for line in lines:
-            # Strip numbering, bullets, quotes
             cleaned = re.sub(r'^[\d\.\-\*\"\'\s]+', '', line).strip()
             cleaned = cleaned.strip('"\'')
             if cleaned and len(cleaned) > 5:

@@ -7,7 +7,7 @@ from stores.qdrant_store import QdrantStore
 from core.retrieval.bm25_retriever import BM25Retriever
 
 from query.context_builder import build_prompt, SYSTEM_PROMPT
-from core.generation.llm_client import OllamaClient
+from core.generation.llm_client import LLMClient
 
 
 # Initialize components once
@@ -21,7 +21,7 @@ retriever = HybridRetriever(
     bm25=bm25,
 )
 
-llm = OllamaClient()
+llm = LLMClient()
 
 
 @celery_app.task

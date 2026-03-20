@@ -4,6 +4,10 @@ POST /query  — ask a question, get a cited answer
 
 Full pipeline per request:
   query → rewrite → hybrid retrieve → rerank → build context → LLM → response
+
+Supports multi-turn conversation: pass previous messages in the request body
+and they will be included in the LLM context window so the model can
+refer back to earlier answers.
 """
 
 import logging
@@ -15,7 +19,7 @@ from pydantic import BaseModel
 from config.settings import settings
 from core.retrieval.hybrid_retriever import HybridRetriever
 from core.reranking.bge_reranker import BGEReranker
-from core.generation.llm_client import OllamaClient
+from core.generation.llm_client import LLMClient
 from query.query_rewriter import QueryRewriter
 from query.context_builder import build_prompt, SYSTEM_PROMPT
 from api.shared_state import bm25, get_qdrant, get_embedder, get_reranker
@@ -29,14 +33,14 @@ _qdrant = None
 _retriever: Optional[HybridRetriever] = None
 _reranker: Optional[BGEReranker] = None
 _rewriter: Optional[QueryRewriter] = None
-_llm: Optional[OllamaClient] = None
+_llm: Optional[LLMClient] = None
 
 
 def _get_retriever() -> HybridRetriever:
     global _embedder, _qdrant, _retriever
     if _retriever is None:
-        _embedder = get_embedder()  # shared singleton, pre-loaded at startup
-        _qdrant = get_qdrant()      # shared singleton — no second cold start
+        _embedder = get_embedder()
+        _qdrant = get_qdrant()
         _retriever = HybridRetriever(
             embedder=_embedder,
             qdrant=_qdrant,
@@ -48,25 +52,30 @@ def _get_retriever() -> HybridRetriever:
 def _get_reranker() -> BGEReranker:
     global _reranker
     if _reranker is None:
-        _reranker = get_reranker()  # shared singleton, pre-loaded at startup
+        _reranker = get_reranker()
     return _reranker
 
 
 def _get_rewriter() -> QueryRewriter:
     global _rewriter
     if _rewriter is None:
-        _rewriter = QueryRewriter()
+        _rewriter = QueryRewriter(llm=_get_llm())
     return _rewriter
 
 
-def _get_llm() -> OllamaClient:
+def _get_llm() -> LLMClient:
     global _llm
     if _llm is None:
-        _llm = OllamaClient()
+        _llm = LLMClient()
     return _llm
 
 
 # --- Request / Response models ---
+
+class ChatMessage(BaseModel):
+    role: str          # "user" | "assistant"
+    content: str
+
 
 class QueryRequest(BaseModel):
     query: str
@@ -74,6 +83,7 @@ class QueryRequest(BaseModel):
     top_k: int = settings.reranker_top_k
     rewrite: bool = True
     stream: bool = False
+    messages: list[ChatMessage] = []
 
 
 class SourceReference(BaseModel):
@@ -102,8 +112,9 @@ async def query(request: QueryRequest):
     """
     Answer a question from case file documents.
     Returns a cited answer with source references.
+    Accepts optional conversation history for multi-turn context.
     """
-    logger.info(f"Query received: '{request.query}' (case_id={request.case_id})")
+    logger.info(f"Query received: '{request.query}' (case_id={request.case_id}, history={len(request.messages)} msgs)")
 
     # 1. Query rewriting
     rewriter = _get_rewriter()
@@ -146,13 +157,17 @@ async def query(request: QueryRequest):
     # 4. Build context + prompt
     prompt, source_dicts = build_prompt(request.query, reranked)
 
-    # 5. Generate answer
+    # 5. Convert conversation history to dicts for the LLM
+    history = [{"role": m.role, "content": m.content} for m in request.messages]
+
+    # 6. Generate answer (with conversation history)
     llm = _get_llm()
     answer = llm.generate(
         prompt=prompt,
         system=SYSTEM_PROMPT,
         temperature=0.1,
-        max_tokens=1024,
+        max_tokens=4096,
+        messages=history if history else None,
     )
 
     sources = [SourceReference(**s) for s in source_dicts]

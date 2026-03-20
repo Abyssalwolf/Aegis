@@ -1,6 +1,7 @@
 """
 RAG query proxy endpoint.
 POST /cases/{case_id}/query  — proxies to the RAG service, scoped to the case.
+Forwards conversation history so the LLM can maintain multi-turn context.
 """
 from typing import Any, List, Optional
 from uuid import UUID
@@ -22,10 +23,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
 class QueryRequest(BaseModel):
     query: str
     top_k: int = 5
     rewrite: bool = True
+    messages: List[ChatMessage] = []
 
 
 class SourceReference(BaseModel):
@@ -57,6 +64,7 @@ async def query_case_documents(
     """
     Ask a question about the documents in a case.
     Validates case access, then proxies to the RAG service with the case_id filter.
+    Forwards conversation history for multi-turn context.
     """
     result = await db.execute(select(Case).filter(Case.id == case_id))
     case = result.scalars().first()
@@ -76,6 +84,7 @@ async def query_case_documents(
                     "top_k": body.top_k,
                     "rewrite": body.rewrite,
                     "stream": False,
+                    "messages": [m.model_dump() for m in body.messages],
                 },
             )
             response.raise_for_status()

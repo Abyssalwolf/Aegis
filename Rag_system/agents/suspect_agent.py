@@ -7,7 +7,7 @@ from stores.qdrant_store import QdrantStore
 from core.retrieval.bm25_retriever import BM25Retriever
 
 from query.context_builder import build_prompt, SYSTEM_PROMPT
-from core.generation.llm_client import OllamaClient
+from core.generation.llm_client import LLMClient
 
 
 embedder = LocalEmbedder()
@@ -15,7 +15,7 @@ qdrant = QdrantStore()
 bm25 = BM25Retriever()
 
 retriever = HybridRetriever(embedder, qdrant, bm25)
-llm = OllamaClient()
+llm = LLMClient()
 
 
 @celery_app.task

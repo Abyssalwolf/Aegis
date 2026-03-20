@@ -5,10 +5,10 @@ from orchestration.blackboard import (
     post_message
 )
 
-from core.generation.llm_client import OllamaClient
+from core.generation.llm_client import LLMClient
 
 
-llm = OllamaClient()
+llm = LLMClient()
 
 
 @celery_app.task

@@ -281,8 +281,15 @@ export default function ChatInterface({ caseId, token, initialDocuments, caseNam
         if (!query || loading) return;
 
         setInput('');
-        setMessages(prev => [...prev, { role: 'user', content: query }]);
+        const userMsg: Message = { role: 'user', content: query };
+        const updatedMessages = [...messages, userMsg];
+        setMessages(updatedMessages);
         setLoading(true);
+
+        // Build conversation history from all previous non-error messages
+        const history = updatedMessages
+            .filter(m => !m.isError)
+            .map(m => ({ role: m.role, content: m.content }));
 
         try {
             const res = await fetch(`http://localhost:8000/api/v1/cases/${caseId}/query`, {
@@ -291,7 +298,11 @@ export default function ChatInterface({ caseId, token, initialDocuments, caseNam
                     'Content-Type': 'application/json',
                     Authorization: `Bearer ${token}`,
                 },
-                body: JSON.stringify({ query, top_k: 5 }),
+                body: JSON.stringify({
+                    query,
+                    top_k: 5,
+                    messages: history.slice(0, -1),
+                }),
             });
 
             if (!res.ok) {

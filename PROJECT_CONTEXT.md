@@ -50,7 +50,7 @@
 | PostgreSQL (Neon.tech cloud) | Main relational DB | cloud |
 | Qdrant | Vector database for RAG | `6333` (moved to remote server — configure `QDRANT_HOST` in `Rag_system/.env`) |
 | Redis | Celery broker + Blackboard | `6379` |
-| Ollama | Local LLM serving | `11434` |
+| Modal (Qwen 3 30b) | Remote LLM serving (OpenAI-compatible) | Set `LLM_BASE_URL` in `Rag_system/.env` |
 
 ---
 
@@ -160,7 +160,7 @@ E:\Major-project\
 │   │   ├── reranking/
 │   │   │   └── bge_reranker.py   ← BAAI/bge-reranker-base cross-encoder
 │   │   └── generation/
-│   │       └── llm_client.py     ← Ollama HTTP client (Qwen2.5:3b)
+│   │       └── llm_client.py     ← OpenAI-compatible LLM client (Qwen 3 30b on Modal)
 │   ├── stores/
 │   │   ├── qdrant_store.py       ← Qdrant vector store client
 │   │   └── document_store.py     ← SQLite audit/status store
@@ -203,7 +203,7 @@ E:\Major-project\
 | **Sparse retrieval** | rank-bm25 (BM25Okapi) | Pickle-persisted index |
 | **Vector database** | Qdrant | Local, port 6333 |
 | **Reranker** | sentence-transformers | BAAI/bge-reranker-base |
-| **Local LLM** | Ollama | Qwen3.5:2b (configured in `Rag_system/.env`) |
+| **Remote LLM** | Qwen 3 30b via Modal (OpenAI-compatible API) | Model: `qwen35-fast`, hosted on Modal |
 | **Task queue** | Celery | Redis broker/backend |
 | **Cache / Blackboard** | Redis | port 6379 |
 
@@ -296,13 +296,14 @@ npm run dev
 
 **Full query pipeline (per request to `POST /query/`):**
 ```
-User query
-  → QueryRewriter        — generates 2 alternative phrasings via Ollama
+User query + optional conversation history
+  → QueryRewriter        — generates 2 alternative phrasings via LLM
   → HybridRetriever      — runs dense (Qdrant) + sparse (BM25) search for each query variant
                          — fuses all results with Reciprocal Rank Fusion (RRF) → top-50
   → BGEReranker          — cross-encoder reranking of top-50 → top-5
   → context_builder      — assembles cited prompt with [Source N] labels (2048-token window)
-  → OllamaClient         — generates answer (Qwen2.5:3b, streaming supported)
+  → LLMClient            — generates answer via OpenAI-compatible API (Qwen 3 30b on Modal)
+                         — includes conversation history for multi-turn context
   → QueryResponse        — answer text + list of source references
 ```
 
@@ -333,7 +334,7 @@ uvicorn api.app:app --reload --port 8080
 
 **Prerequisites:**
 - Qdrant: hosted on Ubuntu server, accessed via ngrok tunnel — set `QDRANT_URL` in `Rag_system/.env` (update each time ngrok restarts). Also set `QDRANT_API_KEY` if auth is enabled.
-- Ollama running with model: `ollama run qwen3.5:2b`
+- LLM: Modal-hosted Qwen 3 30b — no local setup required. Set `LLM_BASE_URL`, `LLM_MODEL`, and `LLM_API_KEY` in `Rag_system/.env`
 - Redis running (for Celery): `docker run -p 6379:6379 redis`
 
 ---
@@ -603,8 +604,9 @@ CHUNK_MAX_TOKENS=512
 CHUNK_MIN_TOKENS=50
 SEMANTIC_SIMILARITY_THRESHOLD=0.3
 
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=qwen2.5:3b
+LLM_BASE_URL=<your-openai-compatible-endpoint>/v1
+LLM_MODEL=<model-name>
+LLM_API_KEY=<api-key>
 QUERY_REWRITE_COUNT=2
 
 DOCUMENT_STORE_PATH=data/document_store.db
@@ -640,7 +642,7 @@ Backend FastAPI (port 8000)
                ├──→ Qdrant (port 6333)        — dense vector search
                ├──→ SQLite data/document_store.db — document status tracking
                ├──→ data/bm25_index.pkl        — sparse BM25 index
-               └──→ Ollama (port 11434)        — Qwen2.5:3b LLM
+               └──→ Modal (Qwen 3 30b)        — remote LLM via OpenAI-compatible API
 
 Celery Workers (async, separate process)
   ├── Redis (port 6379)  — task broker + result backend + Blackboard store
@@ -662,7 +664,7 @@ The backend **`analysis.py`** endpoint is a stub. The three frontend pages (`/ch
 | Case officer assignment | ✅ | ✅ | N/A | **Complete** |
 | Document upload | ✅ | ✅ → RAG | ✅ | **Complete** — real ingest via proxy |
 | Document ingestion to RAG | ✅ | ✅ (proxy) | ✅ | **Complete** |
-| RAG chat (`/cases/[id]/chat`) | ✅ (full UI) | ✅ (proxy) | ✅ | **Complete** |
+| RAG chat (`/cases/[id]/chat`) | ✅ (full UI + multi-turn) | ✅ (proxy + history) | ✅ | **Complete** |
 | Multi-agent insights | ⚠️ (stub UI) | ❌ | ⚠️ (1 agent only) | **Not wired** |
 | CCTV analysis | ⚠️ (stub UI) | ❌ | ❌ | **Not started** |
 | Celery task worker | N/A | N/A | ✅ | **Standalone only** |
@@ -694,6 +696,22 @@ The backend **`analysis.py`** endpoint is a stub. The three frontend pages (`/ch
 ## 12. Changelog
 
 > Add a new entry here whenever you make significant changes. Format: `## YYYY-MM-DD — <short description>`
+
+### 2026-03-20 — Replace Ollama with Modal-hosted Qwen 3 30b + multi-turn chat
+
+**LLM migration (Ollama → Modal):**
+- Replaced `OllamaClient` (raw Ollama HTTP API) with `LLMClient` (OpenAI SDK) in `Rag_system/core/generation/llm_client.py`.
+- LLM endpoint, model, and API key are now read from `Rag_system/.env` (`LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`) — no credentials in code.
+- Updated `QueryRewriter` to use `LLMClient` instead of raw `httpx` calls to Ollama `/api/generate`.
+- Updated all agent files (`witness_agent.py`, `supervisor_agent.py`, `timeline_agent.py`, `suspect_agent.py`, `cctv_agent.py`) to import `LLMClient` instead of `OllamaClient`.
+- Settings: replaced `ollama_base_url` / `ollama_model` with `llm_base_url` / `llm_model` / `llm_api_key` in `config/settings.py`.
+- Added `openai` to `Rag_system/requirements.txt`.
+- Removed `httpx` dependency from `llm_client.py` and `query_rewriter.py` (still used elsewhere).
+
+**Multi-turn conversation history:**
+- RAG `POST /query/` now accepts an optional `messages` field (list of `{role, content}` dicts). Previous conversation is passed to the LLM alongside the context-augmented prompt.
+- Backend proxy `POST /cases/{case_id}/query` now accepts and forwards `messages` to the RAG service.
+- Frontend `ChatInterface.tsx` now sends all previous non-error messages as conversation history with each query. Clicking "Clear" resets the history, starting a fresh conversation.
 
 ### 2026-03-17 — Case detail page fixes + officer profile endpoint
 

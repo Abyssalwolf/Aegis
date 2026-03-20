@@ -83,4 +83,4 @@ app.include_router(query_router, prefix="/query", tags=["Query"])
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "model": settings.ollama_model}
+    return {"status": "ok", "model": settings.llm_model}

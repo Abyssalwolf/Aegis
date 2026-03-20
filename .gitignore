@@ -2,6 +2,7 @@
 .env
 *.env
 
+
 # Virtual environments
 .venv/
 venv/

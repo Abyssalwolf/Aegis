@@ -15,6 +15,9 @@ class DocumentInDBBase(DocumentBase):
     case_id: UUID
     uploaded_by: UUID
     filename: Optional[str] = None
+    display_name: Optional[str] = None
+    evidence_category: Optional[str] = None
+    description: Optional[str] = None
     rag_document_id: Optional[str] = None
     ingest_status: str = "pending"
     created_at: datetime

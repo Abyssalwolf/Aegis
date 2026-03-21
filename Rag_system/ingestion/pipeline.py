@@ -58,6 +58,8 @@ class IngestionPipeline:
         file_path: str | Path,
         case_id: Optional[str] = None,
         officer_id: Optional[str] = None,
+        display_name: Optional[str] = None,
+        evidence_category: Optional[str] = None,
         skip_if_exists: bool = True,
     ) -> DocumentRecord:
         """
@@ -90,21 +92,28 @@ class IngestionPipeline:
             file_type=file_type,
             case_id=case_id,
             officer_id=officer_id,
+            display_name=display_name or path.name,
+            evidence_category=evidence_category,
         )
         record = DocumentRecord(metadata=metadata, status=DocumentStatus.PROCESSING)
         self.doc_store.create(record)
+
+        extra_chunk_meta = {
+            "display_name": display_name or path.name,
+        }
+        if evidence_category:
+            extra_chunk_meta["evidence_category"] = evidence_category
 
         try:
             chunks: list[Chunk] = []
 
             if file_type == "pdf":
-                chunks = self._process_pdf(path, record.document_id, case_id)
-                # Update page count
+                chunks = self._process_pdf(path, record.document_id, case_id, extra_chunk_meta)
                 record.metadata.page_count = getattr(
                     self._last_pdf_result, "page_count", None
                 )
             else:
-                chunks = self._process_image(path, record.document_id, case_id)
+                chunks = self._process_image(path, record.document_id, case_id, extra_chunk_meta)
 
             # Embed all chunks in one batch pass
             chunks = self._embed_chunks(chunks)
@@ -165,13 +174,13 @@ class IngestionPipeline:
     # ------------------------------------------------------------------
 
     def _process_pdf(
-        self, path: Path, document_id: str, case_id: Optional[str]
+        self, path: Path, document_id: str, case_id: Optional[str],
+        extra_meta: Optional[dict] = None,
     ) -> list[Chunk]:
         result = self.pdf_loader.load(path)
         self._last_pdf_result = result
         chunks: list[Chunk] = []
 
-        # --- Main text ---
         clean_text = self.cleaner.clean(result.text)
         if clean_text:
             text_chunks = self._text_to_chunks(
@@ -180,10 +189,10 @@ class IngestionPipeline:
                 chunk_type=ChunkType.TEXT,
                 case_id=case_id,
                 source_path=str(path),
+                extra_meta=extra_meta,
             )
             chunks.extend(text_chunks)
 
-        # --- Embedded images ---
         for i, (img_bytes, page_no) in enumerate(
             zip(result.images, result.image_page_numbers)
         ):
@@ -192,6 +201,12 @@ class IngestionPipeline:
             if img_result.text:
                 clean_img_text = self.cleaner.clean(img_result.text)
                 if clean_img_text:
+                    meta = {
+                        "case_id": case_id,
+                        "source_path": str(path),
+                        "image_label": label,
+                        **(extra_meta or {}),
+                    }
                     img_chunk = Chunk(
                         document_id=document_id,
                         chunk_type=ChunkType.IMAGE,
@@ -199,18 +214,15 @@ class IngestionPipeline:
                         page_number=page_no,
                         chunk_index=len(chunks),
                         token_count=len(clean_img_text.split()),
-                        metadata={
-                            "case_id": case_id,
-                            "source_path": str(path),
-                            "image_label": label,
-                        },
+                        metadata=meta,
                     )
                     chunks.append(img_chunk)
 
         return chunks
 
     def _process_image(
-        self, path: Path, document_id: str, case_id: Optional[str]
+        self, path: Path, document_id: str, case_id: Optional[str],
+        extra_meta: Optional[dict] = None,
     ) -> list[Chunk]:
         result = self.image_loader.load_file(path)
         chunks: list[Chunk] = []
@@ -224,6 +236,7 @@ class IngestionPipeline:
                     chunk_type=ChunkType.IMAGE,
                     case_id=case_id,
                     source_path=str(path),
+                    extra_meta=extra_meta,
                 )
 
         return chunks
@@ -235,11 +248,17 @@ class IngestionPipeline:
         chunk_type: ChunkType,
         case_id: Optional[str],
         source_path: str,
+        extra_meta: Optional[dict] = None,
     ) -> list[Chunk]:
         semantic_chunks = self.chunker.chunk(text)
         chunks: list[Chunk] = []
 
         for i, sc in enumerate(semantic_chunks):
+            meta = {
+                "case_id": case_id,
+                "source_path": source_path,
+                **(extra_meta or {}),
+            }
             chunk = Chunk(
                 document_id=document_id,
                 chunk_type=chunk_type,
@@ -247,10 +266,7 @@ class IngestionPipeline:
                 chunk_index=i,
                 token_count=sc.token_count,
                 parent_text=sc.parent_text,
-                metadata={
-                    "case_id": case_id,
-                    "source_path": source_path,
-                },
+                metadata=meta,
             )
             chunks.append(chunk)
 

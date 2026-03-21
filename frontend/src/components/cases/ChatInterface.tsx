@@ -4,13 +4,16 @@ import { useState, useRef, useEffect } from 'react';
 import {
     Send, FileText, Loader2, UploadCloud, CheckCircle2,
     AlertCircle, Clock, ChevronDown, ChevronUp, BookOpen, X,
-    RefreshCw, Search, SlidersHorizontal, Sparkles, Brain,
+    RefreshCw, Search, SlidersHorizontal, Sparkles, Brain, Trash2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import UploadModal, { CATEGORY_LABELS } from '@/components/cases/UploadModal';
 
 interface Document {
     id: string;
     filename: string | null;
+    display_name: string | null;
+    evidence_category: string | null;
     document_type: string;
     ingest_status: string;
     rag_document_id: string | null;
@@ -24,6 +27,8 @@ interface SourceReference {
     page_number: number | null;
     relevance_score: number;
     chunk_type: string;
+    display_name?: string;
+    evidence_category?: string;
 }
 
 interface Message {
@@ -40,6 +45,7 @@ interface ChatInterfaceProps {
     token: string;
     initialDocuments: Document[];
     caseName: string;
+    canDeleteDocuments?: boolean;
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -96,22 +102,31 @@ function SourceCard({ sources }: { sources: SourceReference[] }) {
             </button>
             {open && (
                 <div className="divide-y divide-border">
-                    {sources.map((s) => (
-                        <div key={s.index} className="px-3 py-2 text-xs bg-muted/20">
-                            <div className="flex items-center gap-2 mb-0.5">
-                                <span className="font-semibold text-primary">[{s.index}]</span>
-                                <span className="text-muted-foreground truncate max-w-[200px]">
-                                    {s.source_path.split('/').pop() || s.source_path}
-                                </span>
-                                {s.page_number != null && (
-                                    <span className="text-muted-foreground">p.{s.page_number}</span>
-                                )}
+                    {sources.map((s) => {
+                        const label = s.display_name || s.source_path.split('/').pop() || s.source_path;
+                        const catLabel = s.evidence_category ? CATEGORY_LABELS[s.evidence_category] || s.evidence_category : null;
+                        return (
+                            <div key={s.index} className="px-3 py-2 text-xs bg-muted/20">
+                                <div className="flex items-center gap-2 mb-0.5">
+                                    <span className="font-semibold text-primary">[{s.index}]</span>
+                                    <span className="text-foreground truncate max-w-[200px] font-medium">
+                                        {label}
+                                    </span>
+                                    {catLabel && (
+                                        <span className="inline-flex px-1.5 py-0.5 rounded text-[10px] bg-primary/10 text-primary border border-primary/20">
+                                            {catLabel}
+                                        </span>
+                                    )}
+                                    {s.page_number != null && (
+                                        <span className="text-muted-foreground">p.{s.page_number}</span>
+                                    )}
+                                </div>
+                                <div className="text-muted-foreground">
+                                    Score: {(s.relevance_score * 100).toFixed(0)}% · {s.chunk_type}
+                                </div>
                             </div>
-                            <div className="text-muted-foreground">
-                                Score: {(s.relevance_score * 100).toFixed(0)}% · {s.chunk_type}
-                            </div>
-                        </div>
-                    ))}
+                        );
+                    })}
                 </div>
             )}
         </div>
@@ -288,14 +303,15 @@ function renderContent(text: string): React.ReactNode {
     );
 }
 
-export default function ChatInterface({ caseId, token, initialDocuments, caseName }: ChatInterfaceProps) {
+export default function ChatInterface({ caseId, token, initialDocuments, caseName, canDeleteDocuments = false }: ChatInterfaceProps) {
     const [documents, setDocuments] = useState<Document[]>(initialDocuments);
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
     const [uploading, setUploading] = useState(false);
+    const [uploadModalOpen, setUploadModalOpen] = useState(false);
+    const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
     const bottomRef = useRef<HTMLDivElement>(null);
-    const fileInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -359,14 +375,19 @@ export default function ChatInterface({ caseId, token, initialDocuments, caseNam
         }
     };
 
-    const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-
+    const handleUpload = async (data: {
+        file: File;
+        displayName: string;
+        evidenceCategory: string;
+        description: string;
+    }) => {
         setUploading(true);
         const form = new FormData();
-        form.append('file', file);
-        form.append('document_type', file.type || 'application/octet-stream');
+        form.append('file', data.file);
+        form.append('document_type', data.file.type || 'application/octet-stream');
+        form.append('display_name', data.displayName);
+        form.append('evidence_category', data.evidenceCategory);
+        if (data.description) form.append('description', data.description);
 
         try {
             const res = await fetch(`http://localhost:8000/api/v1/cases/${caseId}/documents`, {
@@ -378,12 +399,35 @@ export default function ChatInterface({ caseId, token, initialDocuments, caseNam
             if (res.ok) {
                 const newDoc: Document = await res.json();
                 setDocuments(prev => [newDoc, ...prev]);
+                setUploadModalOpen(false);
             }
         } catch {
             // silently fail; user can retry
         } finally {
             setUploading(false);
-            if (fileInputRef.current) fileInputRef.current.value = '';
+        }
+    };
+
+    const handleDelete = async (docId: string) => {
+        if (!confirm('Are you sure you want to delete this document? Its indexed data will also be removed.')) return;
+
+        setDeletingDocId(docId);
+        try {
+            const res = await fetch(`http://localhost:8000/api/v1/cases/${caseId}/documents/${docId}`, {
+                method: 'DELETE',
+                headers: { Authorization: `Bearer ${token}` },
+            });
+
+            if (res.ok) {
+                setDocuments(prev => prev.filter(d => d.id !== docId));
+            } else {
+                const err = await res.json().catch(() => ({ detail: 'Failed to delete document.' }));
+                alert(err.detail || 'Failed to delete document.');
+            }
+        } catch {
+            alert('Could not reach the server.');
+        } finally {
+            setDeletingDocId(null);
         }
     };
 
@@ -399,19 +443,10 @@ export default function ChatInterface({ caseId, token, initialDocuments, caseNam
                             <FileText className="w-4 h-4 text-primary" />
                             Evidence Files
                         </h2>
-                        <input
-                            ref={fileInputRef}
-                            type="file"
-                            accept=".pdf,.png,.jpg,.jpeg,.tiff,.bmp,.webp"
-                            className="hidden"
-                            onChange={handleUpload}
-                        />
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 w-7 p-0"
+                        <button
+                            className="h-7 w-7 p-0 inline-flex items-center justify-center rounded-md hover:bg-muted transition-colors"
                             title="Upload document"
-                            onClick={() => fileInputRef.current?.click()}
+                            onClick={() => setUploadModalOpen(true)}
                             disabled={uploading}
                         >
                             {uploading ? (
@@ -419,13 +454,13 @@ export default function ChatInterface({ caseId, token, initialDocuments, caseNam
                             ) : (
                                 <UploadCloud className="w-3.5 h-3.5" />
                             )}
-                        </Button>
+                        </button>
                     </div>
 
                     <div className="flex-1 overflow-y-auto space-y-2 pr-0.5">
                         {documents.length === 0 && (
                             <button
-                                onClick={() => fileInputRef.current?.click()}
+                                onClick={() => setUploadModalOpen(true)}
                                 className="w-full flex flex-col items-center justify-center p-6 border-2 border-dashed border-border rounded-lg text-center hover:border-primary/50 hover:bg-primary/5 transition-colors group"
                             >
                                 <UploadCloud className="w-7 h-7 text-muted-foreground group-hover:text-primary mb-2 transition-colors" />
@@ -435,13 +470,34 @@ export default function ChatInterface({ caseId, token, initialDocuments, caseNam
                         {documents.map((doc) => (
                             <div
                                 key={doc.id}
-                                className="p-3 rounded-lg border border-border bg-background/60 space-y-1.5"
+                                className="p-3 rounded-lg border border-border bg-background/60 space-y-1.5 group/doc"
                             >
                                 <div className="flex items-start gap-2">
                                     <FileText className="w-4 h-4 text-primary mt-0.5 shrink-0" />
-                                    <span className="text-xs font-medium leading-snug break-all line-clamp-2">
-                                        {doc.filename || doc.document_type}
-                                    </span>
+                                    <div className="flex-1 min-w-0">
+                                        <span className="text-xs font-medium leading-snug break-all line-clamp-2 block">
+                                            {doc.display_name || doc.filename || doc.document_type}
+                                        </span>
+                                        {doc.evidence_category && (
+                                            <span className="text-[10px] text-muted-foreground">
+                                                {CATEGORY_LABELS[doc.evidence_category] || doc.evidence_category}
+                                            </span>
+                                        )}
+                                    </div>
+                                    {canDeleteDocuments && (
+                                        <button
+                                            onClick={() => handleDelete(doc.id)}
+                                            disabled={deletingDocId === doc.id}
+                                            className="opacity-0 group-hover/doc:opacity-100 transition-opacity p-0.5 rounded hover:bg-red-500/20 text-muted-foreground hover:text-red-400 shrink-0"
+                                            title="Delete document"
+                                        >
+                                            {deletingDocId === doc.id ? (
+                                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                            ) : (
+                                                <Trash2 className="w-3.5 h-3.5" />
+                                            )}
+                                        </button>
+                                    )}
                                 </div>
                                 <div className="flex items-center justify-between">
                                     <StatusBadge status={doc.ingest_status} />
@@ -562,6 +618,13 @@ export default function ChatInterface({ caseId, token, initialDocuments, caseNam
                     </p>
                 </div>
             </div>
+
+            <UploadModal
+                open={uploadModalOpen}
+                onOpenChange={setUploadModalOpen}
+                onUpload={handleUpload}
+                uploading={uploading}
+            />
         </div>
     );
 }

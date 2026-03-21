@@ -23,12 +23,23 @@ export default async function ChatPage({ params }: { params: Promise<{ id: strin
 
     const caseData = await caseRes.json();
 
-    // Pre-fetch documents so the sidebar shows immediately without a client-side waterfall
-    const docsRes = await fetch(`http://localhost:8000/api/v1/cases/${id}/documents`, {
-        headers: { Authorization: `Bearer ${token}` },
-        cache: 'no-store',
-    });
+    // Fetch current user profile and documents in parallel
+    const [meRes, docsRes] = await Promise.all([
+        fetch('http://localhost:8000/api/v1/officer/me', {
+            headers: { Authorization: `Bearer ${token}` },
+            cache: 'no-store',
+        }),
+        fetch(`http://localhost:8000/api/v1/cases/${id}/documents`, {
+            headers: { Authorization: `Bearer ${token}` },
+            cache: 'no-store',
+        }),
+    ]);
+
+    const meData = meRes.ok ? await meRes.json() : null;
     const documents = docsRes.ok ? await docsRes.json() : [];
+
+    const myClearance = meData ? (meData.clearance_level || 0) : 0;
+    const canDeleteDocuments = myClearance > caseData.required_clearance_level;
 
     return (
         <div className="flex flex-col h-full">
@@ -54,6 +65,7 @@ export default async function ChatPage({ params }: { params: Promise<{ id: strin
                 token={token || ''}
                 initialDocuments={documents}
                 caseName={caseData.title}
+                canDeleteDocuments={canDeleteDocuments}
             />
         </div>
     );

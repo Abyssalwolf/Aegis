@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS documents (
     status          TEXT NOT NULL DEFAULT 'pending',
     chunk_count     INTEGER DEFAULT 0,
     page_count      INTEGER,
+    display_name    TEXT,
+    evidence_category TEXT,
     error_message   TEXT,
     extra_metadata  TEXT,           -- JSON blob
     created_at      TEXT NOT NULL,
@@ -38,6 +40,11 @@ CREATE TABLE IF NOT EXISTS documents (
 CREATE INDEX IF NOT EXISTS idx_documents_case_id ON documents(case_id);
 CREATE INDEX IF NOT EXISTS idx_documents_status  ON documents(status);
 """
+
+ALTER_TABLE_SQL = [
+    "ALTER TABLE documents ADD COLUMN display_name TEXT",
+    "ALTER TABLE documents ADD COLUMN evidence_category TEXT",
+]
 
 
 class DocumentStore:
@@ -63,6 +70,11 @@ class DocumentStore:
     def _init_db(self) -> None:
         with self._conn() as conn:
             conn.executescript(CREATE_TABLE_SQL)
+            for stmt in ALTER_TABLE_SQL:
+                try:
+                    conn.execute(stmt)
+                except Exception:
+                    pass  # column already exists
         logger.info(f"Document store initialized at: {self.db_path}")
 
     # ------------------------------------------------------------------
@@ -76,8 +88,9 @@ class DocumentStore:
                 INSERT INTO documents (
                     document_id, filename, source_path, file_type,
                     case_id, officer_id, status, chunk_count, page_count,
+                    display_name, evidence_category,
                     error_message, extra_metadata, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.document_id,
@@ -89,6 +102,8 @@ class DocumentStore:
                     record.status.value,
                     record.chunk_count,
                     record.metadata.page_count,
+                    record.metadata.display_name,
+                    record.metadata.evidence_category,
                     record.error_message,
                     json.dumps(record.metadata.extra),
                     record.created_at.isoformat(),
@@ -119,6 +134,16 @@ class DocumentStore:
                     document_id,
                 ),
             )
+
+    def delete(self, document_id: str) -> bool:
+        with self._conn() as conn:
+            cursor = conn.execute(
+                "DELETE FROM documents WHERE document_id = ?", (document_id,)
+            )
+            deleted = cursor.rowcount > 0
+        if deleted:
+            logger.info(f"Deleted document record: {document_id}")
+        return deleted
 
     # ------------------------------------------------------------------
     # Read operations
@@ -169,6 +194,8 @@ class DocumentStore:
             case_id=row["case_id"],
             officer_id=row["officer_id"],
             page_count=row["page_count"],
+            display_name=row["display_name"] if "display_name" in row.keys() else None,
+            evidence_category=row["evidence_category"] if "evidence_category" in row.keys() else None,
             extra=extra,
         )
         return DocumentRecord(

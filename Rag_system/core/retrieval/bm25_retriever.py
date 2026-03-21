@@ -39,6 +39,9 @@ class BM25Retriever:
         """
         if not chunk_id_text_pairs:
             logger.warning("No chunks provided to build BM25 index — index will be empty.")
+            self._bm25 = None
+            self._chunk_ids = []
+            self._chunk_texts = []
             return
 
         self._chunk_ids = [p[0] for p in chunk_id_text_pairs]

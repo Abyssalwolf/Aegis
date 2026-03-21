@@ -94,6 +94,8 @@ class SourceReference(BaseModel):
     case_id: Optional[str]
     relevance_score: float
     chunk_type: str
+    display_name: Optional[str] = None
+    evidence_category: Optional[str] = None
 
 
 class QueryResponse(BaseModel):

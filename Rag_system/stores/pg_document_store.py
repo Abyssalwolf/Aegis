@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS rag_documents (
     status          TEXT NOT NULL DEFAULT 'pending',
     chunk_count     INTEGER DEFAULT 0,
     page_count      INTEGER,
+    display_name    TEXT,
+    evidence_category TEXT,
     error_message   TEXT,
     extra_metadata  TEXT,
     created_at      TEXT NOT NULL,
@@ -39,6 +41,11 @@ CREATE TABLE IF NOT EXISTS rag_documents (
 CREATE INDEX IF NOT EXISTS idx_rag_documents_case_id ON rag_documents(case_id);
 CREATE INDEX IF NOT EXISTS idx_rag_documents_status  ON rag_documents(status);
 """
+
+ALTER_TABLE_SQL = [
+    "ALTER TABLE rag_documents ADD COLUMN IF NOT EXISTS display_name TEXT",
+    "ALTER TABLE rag_documents ADD COLUMN IF NOT EXISTS evidence_category TEXT",
+]
 
 
 class PgDocumentStore:
@@ -68,6 +75,11 @@ class PgDocumentStore:
                     stmt = statement.strip()
                     if stmt:
                         cur.execute(stmt)
+                for stmt in ALTER_TABLE_SQL:
+                    try:
+                        cur.execute(stmt)
+                    except Exception:
+                        pass
         logger.info("PgDocumentStore initialized (rag_documents table ensured).")
 
     # ------------------------------------------------------------------
@@ -82,8 +94,9 @@ class PgDocumentStore:
                     INSERT INTO rag_documents (
                         document_id, filename, source_path, file_type,
                         case_id, officer_id, status, chunk_count, page_count,
+                        display_name, evidence_category,
                         error_message, extra_metadata, created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (document_id) DO NOTHING
                     """,
                     (
@@ -96,6 +109,8 @@ class PgDocumentStore:
                         record.status.value,
                         record.chunk_count,
                         record.metadata.page_count,
+                        record.metadata.display_name,
+                        record.metadata.evidence_category,
                         record.error_message,
                         json.dumps(record.metadata.extra),
                         record.created_at.isoformat(),
@@ -127,6 +142,18 @@ class PgDocumentStore:
                         document_id,
                     ),
                 )
+
+    def delete(self, document_id: str) -> bool:
+        with self._conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM rag_documents WHERE document_id = %s",
+                    (document_id,),
+                )
+                deleted = cur.rowcount > 0
+        if deleted:
+            logger.info(f"Deleted RAG document record: {document_id}")
+        return deleted
 
     # ------------------------------------------------------------------
     # Read operations
@@ -184,6 +211,8 @@ class PgDocumentStore:
             case_id=row.get("case_id"),
             officer_id=row.get("officer_id"),
             page_count=row.get("page_count"),
+            display_name=row.get("display_name"),
+            evidence_category=row.get("evidence_category"),
             extra=extra,
         )
         return DocumentRecord(

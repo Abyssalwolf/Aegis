@@ -28,6 +28,8 @@ class DocumentMetadata:
     case_id: Optional[str] = None           # Link to a police case
     officer_id: Optional[str] = None        # Who ingested this
     page_count: Optional[int] = None
+    display_name: Optional[str] = None      # User-provided label
+    evidence_category: Optional[str] = None # Police document category
     extra: dict = field(default_factory=dict)
 
 

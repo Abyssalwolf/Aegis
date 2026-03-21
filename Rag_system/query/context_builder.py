@@ -61,7 +61,9 @@ def build_prompt(
         if total_tokens + block_tokens > MAX_CONTEXT_TOKENS:
             break   # Context window full
 
-        # Build source metadata
+        display_name = chunk.metadata.get("display_name") or ""
+        evidence_category = chunk.metadata.get("evidence_category") or ""
+
         source_info = {
             "index": i,
             "chunk_id": chunk.chunk_id,
@@ -71,13 +73,15 @@ def build_prompt(
             "case_id": chunk.metadata.get("case_id"),
             "relevance_score": round(retrieved.score, 4),
             "chunk_type": chunk.chunk_type.value,
+            "display_name": display_name,
+            "evidence_category": evidence_category,
         }
         sources.append(source_info)
 
-        # Format context block
         page_ref = f"(Page {chunk.page_number})" if chunk.page_number else ""
-        filename = source_info["source_path"].split("/")[-1]
-        header = f"[Source {i}] {filename} {page_ref}".strip()
+        label = display_name or source_info["source_path"].split("/")[-1]
+        cat_tag = f"[{evidence_category}] " if evidence_category else ""
+        header = f"[Source {i}] {cat_tag}{label} {page_ref}".strip()
         context_blocks.append(f"{header}\n{display_text}")
         total_tokens += block_tokens
 

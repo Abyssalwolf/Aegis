@@ -1,9 +1,9 @@
 import { getAccessToken } from '@/lib/auth';
-import { Shield, FileText, CheckCircle2, UploadCloud, Activity, Plus, ArrowLeft } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { Shield, FileText, CheckCircle2, Activity, ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
 import { CaseSettingsAction } from '@/components/officer/CaseSettingsAction';
 import { ManageOfficersAction } from '@/components/officer/ManageOfficersAction';
+import DocumentList from '@/components/cases/DocumentList';
 
 export default async function CaseDetailPage({ params }: { params: Promise<{ id: string }> }) {
     const { id } = await params;
@@ -56,6 +56,7 @@ export default async function CaseDetailPage({ params }: { params: Promise<{ id:
     const creatorClearance = creatorData ? (creatorData.clearance_level || 0) : 0;
     const myClearance = meData ? (meData.clearance_level || 0) : 0;
     const canManage = isOwner || (isAssigned && myClearance > creatorClearance);
+    const canDeleteDocuments = myClearance > caseData.required_clearance_level;
 
     return (
         <div className="space-y-6">
@@ -135,7 +136,10 @@ export default async function CaseDetailPage({ params }: { params: Promise<{ id:
                             {documents.map((doc: any, i: number) => (
                                 <div key={doc.id} className="relative pl-8 bg-transparent">
                                     <div className="absolute left-0 top-1 w-5 h-5 rounded-full bg-muted border-2 border-border flex items-center justify-center" />
-                                    <p className="text-sm font-medium">Document Uploaded: {doc.document_type}</p>
+                                    <p className="text-sm font-medium">
+                                        Document Uploaded
+                                        {doc.display_name ? `: ${doc.display_name}` : `: ${doc.document_type}`}
+                                    </p>
                                     <p className="text-xs text-muted-foreground mt-0.5">{new Date(doc.created_at).toLocaleString()}</p>
                                 </div>
                             ))}
@@ -146,30 +150,13 @@ export default async function CaseDetailPage({ params }: { params: Promise<{ id:
                 {/* Sidebar Column */}
                 <div className="col-span-1 space-y-6">
                     <section className="bg-card/50 backdrop-blur-md border border-border rounded-xl p-6 shadow-sm">
-                        <div className="flex items-center justify-between mb-4">
-                            <h2 className="font-semibold flex items-center gap-2 text-foreground">
-                                <UploadCloud className="w-4 h-4 text-muted-foreground" />
-                                Documents
-                            </h2>
-                            <Button variant="ghost" className="h-8 w-8 p-0" title="Upload Document">
-                                <Plus className="w-4 h-4" />
-                            </Button>
-                        </div>
-                        <div className="space-y-3">
-                            {documents.map((doc: any) => (
-                                <div key={doc.id} className="flex items-center justify-between p-3 rounded-lg border border-border bg-background hover:bg-muted/50 transition-colors cursor-pointer group">
-                                    <div className="flex flex-col">
-                                        <span className="text-sm font-medium group-hover:text-primary transition-colors">{doc.document_type}</span>
-                                        <span className="text-xs text-muted-foreground mt-1 truncate max-w-[150px]">{doc.file_path}</span>
-                                    </div>
-                                </div>
-                            ))}
-                            {documents.length === 0 && (
-                                <div className="text-center p-4 border border-dashed border-border rounded-lg text-sm text-muted-foreground">
-                                    No documents attached.
-                                </div>
-                            )}
-                        </div>
+                        <DocumentList
+                            documents={documents}
+                            caseId={id}
+                            token={token || ''}
+                            canDelete={canDeleteDocuments}
+                            enableUpload
+                        />
                     </section>
 
                     <section className="bg-card/50 backdrop-blur-md border border-border rounded-xl p-6 shadow-sm">

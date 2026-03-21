@@ -68,6 +68,8 @@ async def ingest_file(
     file: UploadFile = File(...),
     case_id: Optional[str] = Form(default=None),
     officer_id: Optional[str] = Form(default=None),
+    display_name: Optional[str] = Form(default=None),
+    evidence_category: Optional[str] = Form(default=None),
 ):
     """Upload and ingest a single PDF or image file."""
     if file.content_type not in SUPPORTED_TYPES:
@@ -95,10 +97,10 @@ async def ingest_file(
             file_path=tmp_path,
             case_id=case_id,
             officer_id=officer_id,
+            display_name=display_name,
+            evidence_category=evidence_category,
         )
 
-        # Rebuild BM25 from all Qdrant texts so the new document is immediately searchable.
-        # Full rebuild (not case-scoped update) avoids duplicates in the in-memory index.
         if record.chunk_count > 0:
             all_pairs = pipeline.qdrant.get_all_texts()
             if all_pairs:
@@ -163,6 +165,25 @@ async def ingest_batch(
         pass
 
     return {"results": results, "total": len(results)}
+
+
+@router.delete("/documents/{document_id}")
+def delete_document(document_id: str):
+    """Delete a document's vectors, metadata, and rebuild the sparse index."""
+    doc_store = get_doc_store()
+    record = doc_store.get(document_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Document not found in RAG store.")
+
+    qdrant = get_qdrant()
+    qdrant.delete_document(document_id)
+
+    doc_store.delete(document_id)
+
+    all_pairs = qdrant.get_all_texts()
+    bm25.build_index(all_pairs)
+
+    return {"message": "Document deleted successfully", "document_id": document_id}
 
 
 @router.get("/status/{document_id}")

@@ -67,7 +67,9 @@ E:\Major-project\
 │   ├── alembic/
 │   │   ├── env.py
 │   │   └── versions/
-│   │       └── 94a164febd44_initial_backend_structure.py
+│   │       ├── 94a164febd44_initial_backend_structure.py
+│   │       ├── de7856598563_add_rag_fields_to_document.py
+│   │       └── a3f1c9b84e21_add_document_metadata_fields.py
 │   ├── seed.py                   ← Seeds default admin (admin / admin123)
 │   ├── requirements.txt
 │   └── app/
@@ -80,7 +82,7 @@ E:\Major-project\
 │       │       ├── admin.py      ← /admin/officers CRUD + /admin/cases management
 │       │       ├── officer.py    ← /officer/me, /officer/cases, /officer/list, /officer/{id}
 │       │       ├── cases.py      ← Case lifecycle + assignment endpoints
-│       │       ├── documents.py  ← Document upload/list (mock file storage)
+│       │       ├── documents.py  ← Document upload/list/delete + RAG proxy + metadata fields
 │       │       └── analysis.py   ← STUB: returns "not enabled yet"
 │       ├── core/
 │       │   ├── config.py         ← Settings: SECRET_KEY, token expiry, DB URL
@@ -251,6 +253,7 @@ python seed.py   # creates admin / admin123
 cd backend
 alembic upgrade head
 ```
+Current head revision chain: `94a164febd44` → `de7856598563` (RAG fields on `document`) → `a3f1c9b84e21` (upload metadata: `display_name`, `evidence_category`, `description`). Use the project venv so `asyncpg` and Alembic resolve correctly.
 
 ---
 
@@ -414,7 +417,13 @@ celery -A orchestration.celery_app worker --loglevel=info
 | `case_id` | UUID | FK → case.id, Indexed |
 | `uploaded_by` | UUID | FK → user.id, Indexed |
 | `document_type` | String | MIME type |
-| `file_path` | String | **Mock path only** — no real file storage yet |
+| `file_path` | String | RAG path reference |
+| `filename` | String | Original file name |
+| `display_name` | String | User-provided label for the document |
+| `evidence_category` | String | Police file type: `case_diary`, `fir_file`, `statement_file`, `scene_of_crime`, `forensic_evidence`, `property_seizure`, `arrest_remand`, `other` |
+| `description` | String | Optional notes about the document |
+| `rag_document_id` | String | Links to RAG service document_id |
+| `ingest_status` | String | `pending`, `processing`, `completed`, `failed`, `rag_unavailable` |
 | `created_at` | DateTime(tz) | |
 
 #### `activity_log` table
@@ -423,7 +432,7 @@ celery -A orchestration.celery_app worker --loglevel=info
 | `id` | UUID | PK |
 | `case_id` | UUID | FK → case.id, Indexed |
 | `user_id` | UUID | FK → user.id, Indexed |
-| `action` | String | `CASE_CREATED`, `OFFICER_ASSIGNED`, `OFFICER_REMOVED`, `DOCUMENT_UPLOADED` |
+| `action` | String | `CASE_CREATED`, `OFFICER_ASSIGNED`, `OFFICER_REMOVED`, `DOCUMENT_UPLOADED`, `DOCUMENT_DELETED` |
 | `timestamp` | DateTime(tz) | |
 
 #### `case_analysis` table
@@ -444,6 +453,8 @@ celery -A orchestration.celery_app worker --loglevel=info
 | `document_id` | TEXT | UUID string (PK) |
 | `filename` | TEXT | |
 | `source_path` | TEXT | Local file path used during ingestion |
+| `display_name` | TEXT | User label (mirrors backend) |
+| `evidence_category` | TEXT | Police file type key |
 | `file_type` | TEXT | `pdf` or `image` |
 | `case_id` | TEXT | Foreign reference to PostgreSQL `case.id` (string only, no FK constraint) |
 | `officer_id` | TEXT | Foreign reference to PostgreSQL `user.id` |
@@ -527,8 +538,9 @@ All backend endpoints are prefixed `/api/v1`. Base URL: `http://localhost:8000`
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/cases/{case_id}/documents` | Upload document (multipart/form-data: `file`, `document_type`) — **mock storage only** |
+| POST | `/cases/{case_id}/documents` | Upload document (multipart: `file`, optional `display_name`, `evidence_category`, `description`) — real ingest via RAG proxy |
 | GET | `/cases/{case_id}/documents` | List documents for case |
+| DELETE | `/cases/{case_id}/documents/{document_id}` | Delete document — requires officer clearance > case required level; cascades to RAG (Qdrant vectors + document store + BM25) |
 
 ### Analysis (STUB — always returns "not enabled yet")
 
@@ -548,6 +560,7 @@ All backend endpoints are prefixed `/api/v1`. Base URL: `http://localhost:8000`
 | POST | `/ingest/batch` | Upload + ingest multiple files |
 | GET | `/ingest/status/{document_id}` | Ingestion status (polls SQLite) |
 | GET | `/ingest/documents` | List all ingested documents |
+| DELETE | `/ingest/documents/{document_id}` | Delete document: removes Qdrant vectors + document store record + rebuilds BM25 |
 | POST | `/query/` | Ask a question — body: `{query, case_id?, top_k?, rewrite?, messages?}` → `{answer, reasoning, sources, queries_used, chunks_retrieved, chunks_after_rerank}` |
 
 ---
@@ -662,7 +675,7 @@ The backend **`analysis.py`** endpoint is a stub. The frontend pages `/insights`
 | Admin officer management | ✅ | ✅ | N/A | **Complete** |
 | Case CRUD | ✅ | ✅ | N/A | **Complete** |
 | Case officer assignment | ✅ | ✅ | N/A | **Complete** |
-| Document upload | ✅ | ✅ → RAG | ✅ | **Complete** — real ingest via proxy |
+| Document upload | ✅ (metadata modal: name, category, notes) | ✅ → RAG | ✅ | **Complete** — ingest + `display_name` / `evidence_category` in DB + Qdrant sources |
 | Document ingestion to RAG | ✅ | ✅ (proxy) | ✅ | **Complete** |
 | RAG chat (`/cases/[id]/chat`) | ✅ (full UI + multi-turn) | ✅ (proxy + history) | ✅ | **Complete** |
 | Multi-agent insights | ⚠️ (stub UI) | ❌ | ⚠️ (1 agent only) | **Not wired** |
@@ -696,6 +709,31 @@ The backend **`analysis.py`** endpoint is a stub. The frontend pages `/insights`
 ## 12. Changelog
 
 > Add a new entry here whenever you make significant changes. Format: `## YYYY-MM-DD — <short description>`
+
+### 2026-03-21 — Upload metadata modal + document deletion + evidence categories
+
+**New feature — Upload metadata modal:**
+- Frontend: New `UploadModal` dialog component with fields: file picker, document name (defaults to filename), evidence category dropdown (Case Diary, FIR File, Statement File, Scene of Crime, Forensic/Evidence, Property/Seizure, Arrest & Remand, Other), and optional notes.
+- Replaces raw file input in `ChatInterface` — upload button now opens the modal.
+- Backend: `POST /cases/{case_id}/documents` now accepts `display_name`, `evidence_category`, `description` as additional form fields. Forwarded to RAG service.
+- RAG service: `POST /ingest/file` accepts `display_name` and `evidence_category` form fields. Stored in document metadata and propagated to every Qdrant chunk payload.
+- Alembic migration `a3f1c9b84e21_add_document_metadata_fields.py`: adds `display_name`, `evidence_category`, `description` columns to the `document` table. **Applied** via `alembic upgrade head` on the principal PostgreSQL (Neon) database (2026-03-21).
+- RAG document stores (SQLite + PostgreSQL): new columns added with ALTER fallback for existing databases.
+- Context builder: source headers now show `[Source N] [FIR File] Document Name (Page X)` instead of raw file paths.
+- Source references in query responses now include `display_name` and `evidence_category` fields.
+- Frontend `SourceCard`: shows document name in bold with evidence category badge.
+- Frontend document cards (ChatInterface sidebar + case detail page): show `display_name` with evidence category label.
+- **Case detail dashboard** (`/cases/[id]`): Documents sidebar uses the same `UploadModal` as chat (`DocumentList` with `enableUpload`). The previous Plus button was non-functional; upload from the case page now sends `display_name`, `evidence_category`, and `description` like chat. Activity log line prefers `display_name` when present.
+
+### 2026-03-21 — Document deletion across full stack
+
+**New feature — Delete uploaded documents:**
+- **Backend:** New `DELETE /cases/{case_id}/documents/{document_id}` endpoint in `documents.py`. Access control: officer must have case access AND clearance level strictly higher than the case's `required_clearance_level`. Admins can always delete. Cascades to RAG service, logs `DOCUMENT_DELETED` activity, removes PostgreSQL `Document` row.
+- **RAG service:** New `DELETE /ingest/documents/{document_id}` endpoint in `ingest.py`. Calls `qdrant_store.delete_document()` to remove all vectors from both text and image collections, deletes the metadata record from the document store, and rebuilds the in-memory BM25 index.
+- **RAG document stores:** Added `delete(document_id)` method to both `DocumentStore` (SQLite) and `PgDocumentStore` (PostgreSQL).
+- **BM25 fix:** `build_index()` now properly resets internal state when called with an empty list (previously left stale index in place).
+- **Frontend — Chat page:** `ChatInterface` now accepts `canDeleteDocuments` prop. Chat page fetches `/officer/me` to compute clearance eligibility. Delete button (trash icon) appears on hover over each document card when permitted. Confirmation dialog before deletion.
+- **Frontend — Case detail page:** New `DocumentList` client component replaces static document rendering. Shows delete button on hover when user has sufficient clearance.
 
 ### 2026-03-20 — Replace Ollama with Modal-hosted Qwen 3 30b + multi-turn chat + reasoning UI
 

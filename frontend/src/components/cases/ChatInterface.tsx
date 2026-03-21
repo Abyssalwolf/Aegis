@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import {
     Send, FileText, Loader2, UploadCloud, CheckCircle2,
     AlertCircle, Clock, ChevronDown, ChevronUp, BookOpen, X,
-    RefreshCw, Search, SlidersHorizontal, Sparkles,
+    RefreshCw, Search, SlidersHorizontal, Sparkles, Brain,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
@@ -29,6 +29,7 @@ interface SourceReference {
 interface Message {
     role: 'user' | 'assistant';
     content: string;
+    reasoning?: string;
     sources?: SourceReference[];
     chunks_retrieved?: number;
     isError?: boolean;
@@ -111,6 +112,30 @@ function SourceCard({ sources }: { sources: SourceReference[] }) {
                             </div>
                         </div>
                     ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function ReasoningCard({ reasoning }: { reasoning: string }) {
+    const [open, setOpen] = useState(false);
+    if (!reasoning) return null;
+    return (
+        <div className="mt-3 border border-border rounded-lg overflow-hidden">
+            <button
+                onClick={() => setOpen(v => !v)}
+                className="w-full flex items-center justify-between px-3 py-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+            >
+                <span className="flex items-center gap-1.5">
+                    <Brain className="w-3.5 h-3.5" />
+                    View reasoning
+                </span>
+                {open ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+            </button>
+            {open && (
+                <div className="px-3 py-2.5 text-xs bg-muted/20 text-muted-foreground whitespace-pre-wrap max-h-64 overflow-y-auto leading-relaxed">
+                    {reasoning}
                 </div>
             )}
         </div>
@@ -319,6 +344,7 @@ export default function ChatInterface({ caseId, token, initialDocuments, caseNam
             setMessages(prev => [...prev, {
                 role: 'assistant',
                 content: data.answer,
+                reasoning: data.reasoning || '',
                 sources: data.sources,
                 chunks_retrieved: data.chunks_retrieved,
             }]);
@@ -493,6 +519,7 @@ export default function ChatInterface({ caseId, token, initialDocuments, caseNam
                                 }`}
                             >
                                 <p className="whitespace-pre-wrap">{renderContent(msg.content)}</p>
+                                {msg.reasoning && <ReasoningCard reasoning={msg.reasoning} />}
                                 {msg.sources && <SourceCard sources={msg.sources} />}
                             </div>
                         </div>

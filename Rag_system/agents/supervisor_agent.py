@@ -32,7 +32,7 @@ Detected anomalies:
 Provide a concise investigation summary and highlight key findings.
 """
 
-    summary = llm.generate(prompt)
+    summary = llm.generate(prompt).content
 
     post_message(
         case_id,

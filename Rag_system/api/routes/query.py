@@ -99,6 +99,7 @@ class SourceReference(BaseModel):
 class QueryResponse(BaseModel):
     query: str
     answer: str
+    reasoning: str = ""
     queries_used: list[str]
     sources: list[SourceReference]
     chunks_retrieved: int
@@ -162,11 +163,11 @@ async def query(request: QueryRequest):
 
     # 6. Generate answer (with conversation history)
     llm = _get_llm()
-    answer = llm.generate(
+    result = llm.generate(
         prompt=prompt,
         system=SYSTEM_PROMPT,
         temperature=0.1,
-        max_tokens=4096,
+        max_tokens=16384,
         messages=history if history else None,
     )
 
@@ -174,7 +175,8 @@ async def query(request: QueryRequest):
 
     return QueryResponse(
         query=request.query,
-        answer=answer,
+        answer=result.content,
+        reasoning=result.reasoning,
         queries_used=queries,
         sources=sources,
         chunks_retrieved=len(candidates),

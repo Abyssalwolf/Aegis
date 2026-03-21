@@ -30,10 +30,9 @@ class Settings(BaseSettings):
     # Drop threshold: if cosine similarity between adjacent sentences drops below
     # (mean - threshold * std), cut a chunk boundary there.
 
-    # --- LLM (OpenAI-compatible API — set in .env) ---
+    # --- LLM (Ollama native API — set in .env) ---
     llm_base_url: str = Field(default="", env="LLM_BASE_URL")
     llm_model: str = Field(default="", env="LLM_MODEL")
-    llm_api_key: str = Field(default="", env="LLM_API_KEY")
     query_rewrite_count: int = Field(default=2, env="QUERY_REWRITE_COUNT")
 
     # --- Storage ---

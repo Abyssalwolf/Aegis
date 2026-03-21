@@ -1,18 +1,16 @@
 """
-LLM client backed by an OpenAI-compatible API (Modal-hosted Qwen 3 30b).
-Supports conversation history for multi-turn chat and single-shot generation
-for internal tasks like query rewriting.
-
-Qwen3 models default to "thinking mode" which puts reasoning in a separate
-field and can exhaust the token budget before producing an answer.
-We append /nothink to user prompts to disable this behaviour.
+LLM client backed by a remote Ollama server (Modal-hosted Qwen 3 30b).
+Uses the native Ollama /api/chat endpoint with thinking enabled.
+Returns both content and reasoning separately so callers can choose
+what to display.
 """
 
 import logging
 import re
+from dataclasses import dataclass
 from typing import Optional
 
-from openai import OpenAI
+import httpx
 
 from config.settings import settings
 
@@ -22,8 +20,14 @@ _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
 def _strip_thinking(text: str) -> str:
-    """Remove <think>...</think> blocks emitted by Qwen3-style reasoning models."""
+    """Remove any residual <think>...</think> blocks from content."""
     return _THINK_RE.sub("", text).strip()
+
+
+@dataclass
+class LLMResponse:
+    content: str
+    reasoning: str
 
 
 class LLMClient:
@@ -32,10 +36,9 @@ class LLMClient:
         self,
         base_url: str = settings.llm_base_url,
         model: str = settings.llm_model,
-        api_key: str = settings.llm_api_key,
     ):
+        self.base_url = base_url.rstrip("/")
         self.model = model
-        self.client = OpenAI(base_url=base_url, api_key=api_key)
 
     def generate(
         self,
@@ -44,14 +47,10 @@ class LLMClient:
         temperature: float = 0.1,
         max_tokens: int = 1024,
         messages: Optional[list[dict]] = None,
-    ) -> str:
+    ) -> LLMResponse:
         """
-        Chat-completion generation.
-
-        If *messages* is provided the call becomes multi-turn:
-            [system] + messages + [user: prompt + /nothink]
-        Otherwise it is a single-turn call:
-            [system] + [user: prompt + /nothink]
+        Chat generation via Ollama native /api/chat with thinking enabled.
+        Returns an LLMResponse with separate content and reasoning fields.
         """
         chat_messages: list[dict] = []
 
@@ -61,28 +60,44 @@ class LLMClient:
         if messages:
             chat_messages.extend(messages)
 
-        chat_messages.append({"role": "user", "content": prompt + " /nothink"})
+        chat_messages.append({"role": "user", "content": prompt})
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=chat_messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                extra_body={"keep_alive": -1},
+            response = httpx.post(
+                f"{self.base_url}/api/chat",
+                json={
+                    "model": self.model,
+                    "messages": chat_messages,
+                    "stream": False,
+                    "think": True,
+                    "keep_alive": -1,
+                    "options": {
+                        "temperature": temperature,
+                        "num_predict": max_tokens,
+                    },
+                },
+                timeout=300.0,
             )
-            raw = response.choices[0].message.content or ""
-            return _strip_thinking(raw)
+            response.raise_for_status()
+            data = response.json()
+            msg = data.get("message", {})
+            content = _strip_thinking(msg.get("content", ""))
+            reasoning = (msg.get("thinking", "") or "").strip()
 
-        except Exception as exc:
+            return LLMResponse(content=content, reasoning=reasoning)
+
+        except httpx.ConnectError:
             raise RuntimeError(
-                f"LLM API error ({self.client.base_url}): {exc}"
-            ) from exc
+                f"Cannot reach LLM at {self.base_url}. "
+                "Is the Ollama server running?"
+            )
+        except httpx.HTTPStatusError as e:
+            raise RuntimeError(f"LLM API error: {e.response.text}")
 
     def is_available(self) -> bool:
-        """Health check — returns True if the LLM endpoint is reachable."""
+        """Health check — returns True if the Ollama server is reachable."""
         try:
-            self.client.models.list()
-            return True
+            resp = httpx.get(self.base_url, timeout=5.0)
+            return resp.status_code == 200
         except Exception:
             return False

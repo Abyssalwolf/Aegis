@@ -48,6 +48,7 @@ class SourceReference(BaseModel):
 class QueryResponse(BaseModel):
     query: str
     answer: str
+    reasoning: str = ""
     queries_used: List[str]
     sources: List[SourceReference]
     chunks_retrieved: int
@@ -75,7 +76,7 @@ async def query_case_documents(
         raise HTTPException(status_code=403, detail="Forbidden")
 
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=300.0) as client:
             response = await client.post(
                 f"{settings.RAG_SERVICE_URL}/query/",
                 json={

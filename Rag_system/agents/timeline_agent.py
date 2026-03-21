@@ -32,7 +32,7 @@ If there are contradictions or suspicious timeline issues, explain them.
 If everything is consistent, say "No anomaly detected".
 """
 
-    analysis = llm.generate(prompt)
+    analysis = llm.generate(prompt).content
 
     if "no anomaly" not in analysis.lower():
 

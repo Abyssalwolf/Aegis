@@ -31,7 +31,7 @@ def suspect_agent(case_id: str):
 
     prompt, sources = build_prompt(query, chunks)
 
-    answer = llm.generate(prompt)
+    answer = llm.generate(prompt).content
 
     post_message(
         case_id,

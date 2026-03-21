@@ -41,7 +41,7 @@
 |---|---|---|---|
 | `backend/` | Python / FastAPI | `8000` | Fully operational |
 | `frontend/` | TypeScript / Next.js 16.1.7 | `3000` | Fully operational |
-| `Rag_system/` | Python / FastAPI | `8080` | Built, not yet wired to backend |
+| `Rag_system/` | Python / FastAPI | `8080` | Fully operational, proxied via backend |
 
 **Supporting infrastructure:**
 
@@ -50,7 +50,7 @@
 | PostgreSQL (Neon.tech cloud) | Main relational DB | cloud |
 | Qdrant | Vector database for RAG | `6333` (moved to remote server — configure `QDRANT_HOST` in `Rag_system/.env`) |
 | Redis | Celery broker + Blackboard | `6379` |
-| Modal (Qwen 3 30b) | Remote LLM serving (OpenAI-compatible) | Set `LLM_BASE_URL` in `Rag_system/.env` |
+| Modal (Qwen 3 30b) | Remote LLM via native Ollama API | Set `LLM_BASE_URL` in `Rag_system/.env` |
 
 ---
 
@@ -160,13 +160,13 @@ E:\Major-project\
 │   │   ├── reranking/
 │   │   │   └── bge_reranker.py   ← BAAI/bge-reranker-base cross-encoder
 │   │   └── generation/
-│   │       └── llm_client.py     ← OpenAI-compatible LLM client (Qwen 3 30b on Modal)
+│   │       └── llm_client.py     ← LLM client (native Ollama API, returns content + reasoning)
 │   ├── stores/
 │   │   ├── qdrant_store.py       ← Qdrant vector store client
 │   │   └── document_store.py     ← SQLite audit/status store
 │   ├── query/
 │   │   ├── context_builder.py    ← Assembles cited prompt for LLM (2048-token window)
-│   │   └── query_rewriter.py     ← Multi-query expansion via Ollama
+│   │   └── query_rewriter.py     ← Multi-query expansion via LLM
 │   ├── agents/
 │   │   └── witness_agent.py      ← Celery task: RAG query → Blackboard
 │   └── orchestration/
@@ -203,7 +203,7 @@ E:\Major-project\
 | **Sparse retrieval** | rank-bm25 (BM25Okapi) | Pickle-persisted index |
 | **Vector database** | Qdrant | Local, port 6333 |
 | **Reranker** | sentence-transformers | BAAI/bge-reranker-base |
-| **Remote LLM** | Qwen 3 30b via Modal (OpenAI-compatible API) | Model: `qwen35-fast`, hosted on Modal |
+| **Remote LLM** | Qwen 3 30b via Modal (native Ollama API) | Model: `qwen35-fast`, thinking enabled, returns content + reasoning separately |
 | **Task queue** | Celery | Redis broker/backend |
 | **Cache / Blackboard** | Redis | port 6379 |
 
@@ -302,9 +302,10 @@ User query + optional conversation history
                          — fuses all results with Reciprocal Rank Fusion (RRF) → top-50
   → BGEReranker          — cross-encoder reranking of top-50 → top-5
   → context_builder      — assembles cited prompt with [Source N] labels (2048-token window)
-  → LLMClient            — generates answer via OpenAI-compatible API (Qwen 3 30b on Modal)
+  → LLMClient            — generates answer via native Ollama /api/chat (Qwen 3 30b on Modal)
+                         — thinking enabled: returns content + reasoning separately
                          — includes conversation history for multi-turn context
-  → QueryResponse        — answer text + list of source references
+  → QueryResponse        — answer text + reasoning chain + list of source references
 ```
 
 **Qdrant collections:**
@@ -334,7 +335,7 @@ uvicorn api.app:app --reload --port 8080
 
 **Prerequisites:**
 - Qdrant: hosted on Ubuntu server, accessed via ngrok tunnel — set `QDRANT_URL` in `Rag_system/.env` (update each time ngrok restarts). Also set `QDRANT_API_KEY` if auth is enabled.
-- LLM: Modal-hosted Qwen 3 30b — no local setup required. Set `LLM_BASE_URL`, `LLM_MODEL`, and `LLM_API_KEY` in `Rag_system/.env`
+- LLM: Modal-hosted Qwen 3 30b — no local setup required. Set `LLM_BASE_URL` and `LLM_MODEL` in `Rag_system/.env`
 - Redis running (for Celery): `docker run -p 6379:6379 redis`
 
 ---
@@ -547,7 +548,7 @@ All backend endpoints are prefixed `/api/v1`. Base URL: `http://localhost:8000`
 | POST | `/ingest/batch` | Upload + ingest multiple files |
 | GET | `/ingest/status/{document_id}` | Ingestion status (polls SQLite) |
 | GET | `/ingest/documents` | List all ingested documents |
-| POST | `/query/` | Ask a question — body: `{query: string, case_id?: string, top_k?: int}` → `{answer, sources}` |
+| POST | `/query/` | Ask a question — body: `{query, case_id?, top_k?, rewrite?, messages?}` → `{answer, reasoning, sources, queries_used, chunks_retrieved, chunks_after_rerank}` |
 
 ---
 
@@ -604,9 +605,8 @@ CHUNK_MAX_TOKENS=512
 CHUNK_MIN_TOKENS=50
 SEMANTIC_SIMILARITY_THRESHOLD=0.3
 
-LLM_BASE_URL=<your-openai-compatible-endpoint>/v1
+LLM_BASE_URL=<your-ollama-endpoint>
 LLM_MODEL=<model-name>
-LLM_API_KEY=<api-key>
 QUERY_REWRITE_COUNT=2
 
 DOCUMENT_STORE_PATH=data/document_store.db
@@ -637,20 +637,20 @@ Backend FastAPI (port 8000)
   ├──→ PostgreSQL (Neon.tech)
   │     └── users, cases, assignments, documents (mock), activities, analysis (stub)
   │
-  └──→ [NOT YET CONNECTED] RAG Service (port 8080)
+  └──→ RAG Service (port 8080) — proxied via /cases/{id}/query and /cases/{id}/documents
                │
                ├──→ Qdrant (port 6333)        — dense vector search
-               ├──→ SQLite data/document_store.db — document status tracking
-               ├──→ data/bm25_index.pkl        — sparse BM25 index
-               └──→ Modal (Qwen 3 30b)        — remote LLM via OpenAI-compatible API
+               ├──→ PostgreSQL / SQLite        — document status tracking
+               ├──→ BM25 (in-memory)           — sparse retrieval index
+               └──→ Modal (Qwen 3 30b)        — remote LLM via native Ollama /api/chat (thinking enabled)
 
 Celery Workers (async, separate process)
   ├── Redis (port 6379)  — task broker + result backend + Blackboard store
-  └── Uses: HybridRetriever, OllamaClient, QdrantStore, Blackboard
+  └── Uses: HybridRetriever, LLMClient, QdrantStore, Blackboard
 ```
 
-### Critical Missing Integration
-The backend **`analysis.py`** endpoint is a stub. The three frontend pages (`/chat`, `/insights`, `/cctv`) are all stubs. **No HTTP call from backend → RAG service currently exists.**
+### Remaining Stubs
+The backend **`analysis.py`** endpoint is a stub. The frontend pages `/insights` and `/cctv` are stubs. The chat page (`/cases/[id]/chat`) is fully operational with multi-turn conversation and reasoning transparency.
 
 ---
 
@@ -697,21 +697,26 @@ The backend **`analysis.py`** endpoint is a stub. The three frontend pages (`/ch
 
 > Add a new entry here whenever you make significant changes. Format: `## YYYY-MM-DD — <short description>`
 
-### 2026-03-20 — Replace Ollama with Modal-hosted Qwen 3 30b + multi-turn chat
+### 2026-03-20 — Replace Ollama with Modal-hosted Qwen 3 30b + multi-turn chat + reasoning UI
 
 **LLM migration (Ollama → Modal):**
-- Replaced `OllamaClient` (raw Ollama HTTP API) with `LLMClient` (OpenAI SDK) in `Rag_system/core/generation/llm_client.py`.
-- LLM endpoint, model, and API key are now read from `Rag_system/.env` (`LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`) — no credentials in code.
-- Updated `QueryRewriter` to use `LLMClient` instead of raw `httpx` calls to Ollama `/api/generate`.
-- Updated all agent files (`witness_agent.py`, `supervisor_agent.py`, `timeline_agent.py`, `suspect_agent.py`, `cctv_agent.py`) to import `LLMClient` instead of `OllamaClient`.
-- Settings: replaced `ollama_base_url` / `ollama_model` with `llm_base_url` / `llm_model` / `llm_api_key` in `config/settings.py`.
-- Added `openai` to `Rag_system/requirements.txt`.
-- Removed `httpx` dependency from `llm_client.py` and `query_rewriter.py` (still used elsewhere).
+- Replaced `OllamaClient` with `LLMClient` in `Rag_system/core/generation/llm_client.py`. Uses native Ollama `/api/chat` endpoint via `httpx`.
+- LLM endpoint and model are read from `Rag_system/.env` (`LLM_BASE_URL`, `LLM_MODEL`) — no credentials in code.
+- `LLMClient.generate()` returns an `LLMResponse` dataclass with separate `content` and `reasoning` fields. Thinking mode is enabled (`think: true`) — the model's chain-of-thought is captured in `reasoning` and stripped from `content`.
+- Updated `QueryRewriter` to use `LLMClient` — uses only `.content` for generating query variants.
+- Updated all agent files (`witness_agent.py`, `supervisor_agent.py`, `timeline_agent.py`, `suspect_agent.py`, `cctv_agent.py`) to use `.content` from `LLMResponse`.
+- Settings: replaced `ollama_base_url` / `ollama_model` with `llm_base_url` / `llm_model` in `config/settings.py`.
 
 **Multi-turn conversation history:**
 - RAG `POST /query/` now accepts an optional `messages` field (list of `{role, content}` dicts). Previous conversation is passed to the LLM alongside the context-augmented prompt.
 - Backend proxy `POST /cases/{case_id}/query` now accepts and forwards `messages` to the RAG service.
 - Frontend `ChatInterface.tsx` now sends all previous non-error messages as conversation history with each query. Clicking "Clear" resets the history, starting a fresh conversation.
+
+**Reasoning transparency UI:**
+- RAG `POST /query/` response now includes a `reasoning` field with the model's chain-of-thought.
+- Backend proxy forwards `reasoning` to frontend.
+- Frontend shows a collapsible "View reasoning" button (Brain icon) on assistant messages. Reasoning is hidden by default and displayed in a scrollable container when toggled.
+- Max tokens increased to 16384 for answer generation and 2048 for query rewriting to accommodate reasoning + content.
 
 ### 2026-03-17 — Case detail page fixes + officer profile endpoint
 

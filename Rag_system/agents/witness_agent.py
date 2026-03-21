@@ -43,7 +43,7 @@ def witness_agent(case_id: str):
     prompt, sources = build_prompt(query, chunks)
 
     # 3️⃣ Generate analysis
-    answer = llm.generate(prompt=prompt, system=SYSTEM_PROMPT)
+    answer = llm.generate(prompt=prompt, system=SYSTEM_PROMPT).content
 
     # 4️⃣ Post to blackboard
     post_message(

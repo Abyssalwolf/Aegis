@@ -20,9 +20,6 @@ qdrant-client==1.11.3
 # Sparse retrieval
 rank-bm25==0.2.2
 
-# LLM client (OpenAI-compatible API)
-openai
-
 # Utilities
 python-dotenv==1.0.1
 psycopg2-binary

@@ -1,7 +1,7 @@
 """
 Query rewriter.
-Uses the LLM (OpenAI-compatible API) to generate N alternative phrasings
-of the user's query to improve retrieval recall via multi-query expansion.
+Uses the LLM to generate N alternative phrasings of the user's query
+to improve retrieval recall via multi-query expansion.
 
 The original query is always included, so retrieval always covers
 the user's exact intent.
@@ -16,11 +16,8 @@ from config.settings import settings
 logger = logging.getLogger(__name__)
 
 REWRITE_PROMPT = """\
-You are helping improve a document retrieval system for police case files.
-
 Given the following search query, generate {n} alternative phrasings that
 capture the same information need but use different words and structure.
-This helps retrieve relevant documents that may use different terminology.
 
 Rules:
 - Keep each rewrite concise (under 20 words)
@@ -66,12 +63,12 @@ class QueryRewriter:
         prompt = REWRITE_PROMPT.format(n=self.n_rewrites, query=query)
 
         try:
-            raw_text = self.llm.generate(
+            result = self.llm.generate(
                 prompt=prompt,
                 temperature=0.3,
-                max_tokens=200,
+                max_tokens=2048,
             )
-            return self._parse_rewrites(raw_text)
+            return self._parse_rewrites(result.content)
 
         except Exception as e:
             logger.warning(f"Query rewriting failed: {e}. Using original query.")

@@ -1,5 +1,8 @@
 import { getAccessToken } from '@/lib/auth';
-import { Shield, FileText, CheckCircle2, UploadCloud, Activity, Plus, ArrowLeft } from 'lucide-react';
+import { getApiV1Url } from '@/lib/api';
+import { Shield, FileText, CheckCircle2, UploadCloud, Activity, ArrowLeft, MessageSquare, BrainCircuit } from 'lucide-react';
+import { CaseAnalysisSnapshots } from '@/components/cases/CaseAnalysisSnapshots';
+import { CaseDocumentsUploadSection } from '@/components/cases/CaseDocumentsUploadSection';
 import { Button } from '@/components/ui/button';
 import Link from 'next/link';
 import { CaseSettingsAction } from '@/components/officer/CaseSettingsAction';
@@ -10,7 +13,7 @@ export default async function CaseDetailPage({ params }: { params: Promise<{ id:
     const token = await getAccessToken();
 
     // Fetch case details
-    const caseRes = await fetch(`http://localhost:8000/api/v1/cases/${id}`, {
+    const caseRes = await fetch(`${getApiV1Url()}/cases/${id}`, {
         headers: { Authorization: `Bearer ${token}` },
         cache: 'no-store'
     });
@@ -22,14 +25,14 @@ export default async function CaseDetailPage({ params }: { params: Promise<{ id:
     const caseData = await caseRes.json();
 
     // Fetch current user details
-    const meRes = await fetch('http://localhost:8000/api/v1/officer/me', {
+    const meRes = await fetch(`${getApiV1Url()}/officer/me`, {
         headers: { Authorization: `Bearer ${token}` },
         cache: 'no-store'
     });
     const meData = meRes.ok ? await meRes.json() : null;
 
     // Fetch creator details
-    const creatorRes = await fetch(`http://localhost:8000/api/v1/officer/${caseData.created_by}`, {
+    const creatorRes = await fetch(`${getApiV1Url()}/officer/${caseData.created_by}`, {
         headers: { Authorization: `Bearer ${token}` },
         cache: 'no-store'
     });
@@ -38,18 +41,24 @@ export default async function CaseDetailPage({ params }: { params: Promise<{ id:
     const isOwner = meData && meData.id === caseData.created_by;
 
     // Fetch documents
-    const docsRes = await fetch(`http://localhost:8000/api/v1/cases/${id}/documents`, {
+    const docsRes = await fetch(`${getApiV1Url()}/cases/${id}/documents`, {
         headers: { Authorization: `Bearer ${token}` },
         cache: 'no-store'
     });
     const documents = docsRes.ok ? await docsRes.json() : [];
 
     // Fetch assigned officers
-    const assignedRes = await fetch(`http://localhost:8000/api/v1/cases/${id}/officers`, {
+    const assignedRes = await fetch(`${getApiV1Url()}/cases/${id}/officers`, {
         headers: { Authorization: `Bearer ${token}` },
         cache: 'no-store'
     });
     const assignedOfficers = assignedRes.ok ? await assignedRes.json() : [];
+
+    const analysisRes = await fetch(`${getApiV1Url()}/cases/${id}/analysis`, {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: 'no-store',
+    });
+    const analysisSnapshots = analysisRes.ok ? await analysisRes.json() : [];
 
     // Logic: can manage if owner OR (assigned AND higher clearance than owner)
     const isAssigned = meData && assignedOfficers.some((officer: any) => officer.id === meData.id);
@@ -80,11 +89,25 @@ export default async function CaseDetailPage({ params }: { params: Promise<{ id:
                     </div>
                     <h1 className="text-3xl md:text-4xl font-bold tracking-tight text-foreground">{caseData.title}</h1>
                 </div>
-                {isOwner && (
-                    <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3">
+                    <Link
+                        href={`/cases/${caseData.id}/chat`}
+                        className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium h-9 px-3 bg-primary text-primary-foreground hover:bg-primary/90 hover:shadow-md transition-all"
+                    >
+                        <MessageSquare className="w-4 h-4" />
+                        AI Investigation
+                    </Link>
+                    <Link
+                        href={`/cases/${caseData.id}/insights`}
+                        className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium h-9 px-3 border border-border bg-card hover:bg-muted/60 transition-all"
+                    >
+                        <BrainCircuit className="w-4 h-4" />
+                        Insights
+                    </Link>
+                    {isOwner && (
                         <CaseSettingsAction token={token || ''} caseId={caseData.id} caseTitle={caseData.title} />
-                    </div>
-                )}
+                    )}
+                </div>
             </div>
 
             <div className="pt-8 grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -116,6 +139,8 @@ export default async function CaseDetailPage({ params }: { params: Promise<{ id:
                         </div>
                     </section>
 
+                    <CaseAnalysisSnapshots caseId={caseData.id} token={token || ''} initial={analysisSnapshots} />
+
                     <section className="bg-card/50 backdrop-blur-md border border-border rounded-xl p-6 shadow-sm">
                         <div className="flex items-center justify-between mb-6">
                             <h2 className="text-xl font-semibold flex items-center gap-2">
@@ -135,7 +160,13 @@ export default async function CaseDetailPage({ params }: { params: Promise<{ id:
                             {documents.map((doc: any, i: number) => (
                                 <div key={doc.id} className="relative pl-8 bg-transparent">
                                     <div className="absolute left-0 top-1 w-5 h-5 rounded-full bg-muted border-2 border-border flex items-center justify-center" />
-                                    <p className="text-sm font-medium">Document Uploaded: {doc.document_type}</p>
+                                    <p className="text-sm font-medium">
+                                        Document uploaded
+                                        {doc.display_name ? `: ${doc.display_name}` : doc.filename ? `: ${doc.filename}` : `: ${doc.document_type}`}
+                                        {doc.evidence_category ? (
+                                            <span className="text-muted-foreground font-normal"> · {String(doc.evidence_category).replace(/_/g, ' ')}</span>
+                                        ) : null}
+                                    </p>
                                     <p className="text-xs text-muted-foreground mt-0.5">{new Date(doc.created_at).toLocaleString()}</p>
                                 </div>
                             ))}
@@ -151,15 +182,18 @@ export default async function CaseDetailPage({ params }: { params: Promise<{ id:
                                 <UploadCloud className="w-4 h-4 text-muted-foreground" />
                                 Documents
                             </h2>
-                            <Button variant="ghost" className="h-8 w-8 p-0" title="Upload Document">
-                                <Plus className="w-4 h-4" />
-                            </Button>
+                            <CaseDocumentsUploadSection caseId={caseData.id} token={token || ''} />
                         </div>
                         <div className="space-y-3">
                             {documents.map((doc: any) => (
                                 <div key={doc.id} className="flex items-center justify-between p-3 rounded-lg border border-border bg-background hover:bg-muted/50 transition-colors cursor-pointer group">
                                     <div className="flex flex-col">
-                                        <span className="text-sm font-medium group-hover:text-primary transition-colors">{doc.document_type}</span>
+                                        <span className="text-sm font-medium group-hover:text-primary transition-colors">
+                                            {doc.display_name || doc.filename || doc.document_type}
+                                        </span>
+                                        {doc.evidence_category && (
+                                            <span className="text-[10px] text-muted-foreground capitalize">{String(doc.evidence_category).replace(/_/g, ' ')}</span>
+                                        )}
                                         <span className="text-xs text-muted-foreground mt-1 truncate max-w-[150px]">{doc.file_path}</span>
                                     </div>
                                 </div>

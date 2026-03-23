@@ -31,3 +31,12 @@ class Case(CaseInDBBase):
 
 class CaseTransfer(BaseModel):
     new_owner_id: UUID
+
+
+class PaginatedCases(BaseModel):
+    """Paginated case list for officer/admin dashboards."""
+
+    items: List[Case]
+    total: int
+    skip: int
+    limit: int

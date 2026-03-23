@@ -3,6 +3,8 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 
+import { getApiV1Url } from '@/lib/api';
+
 export async function loginAction(formData: FormData) {
     const username = formData.get('username');
     const password = formData.get('password');
@@ -12,7 +14,7 @@ export async function loginAction(formData: FormData) {
     }
 
     try {
-        const res = await fetch('http://localhost:8000/api/v1/auth/login', {
+        const res = await fetch(`${getApiV1Url()}/auth/login`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
@@ -46,7 +48,7 @@ export async function loginAction(formData: FormData) {
             path: '/',
         });
 
-        const meRes = await fetch('http://localhost:8000/api/v1/officer/me', {
+        const meRes = await fetch(`${getApiV1Url()}/officer/me`, {
             headers: { Authorization: `Bearer ${tokens.access_token}` }
         });
 

@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { getApiV1Url } from '@/lib/api';
 
 const caseSchema = z.object({
     title: z.string().min(3, "Title must be at least 3 characters"),
@@ -55,12 +56,12 @@ export function CreateCaseModal({ isOpen, onClose, onSave, token }: CreateCaseMo
     const fetchOfficers = async () => {
         setIsLoadingOfficers(true);
         try {
-            const res = await fetch('http://localhost:8000/api/v1/officer/list', {
+            const res = await fetch(`${getApiV1Url()}/officer/list?limit=500`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             if (res.ok) {
                 const data = await res.json();
-                setOfficers(data);
+                setOfficers(Array.isArray(data) ? data : (data.items ?? []));
             }
         } catch (e) {
             console.error("Failed to fetch officers", e);
@@ -87,7 +88,7 @@ export function CreateCaseModal({ isOpen, onClose, onSave, token }: CreateCaseMo
         setError(null);
 
         try {
-            const res = await fetch('http://localhost:8000/api/v1/cases', {
+            const res = await fetch(`${getApiV1Url()}/cases`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

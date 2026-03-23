@@ -1,9 +1,9 @@
-from typing import Any, List, Optional
+from typing import Any, Optional
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import delete
+from sqlalchemy import delete, func
 
 from app.api import deps
 from app.core.security import get_password_hash
@@ -12,21 +12,26 @@ from app.models.case import Case
 from app.models.assignment import CaseAssignment
 from app.models.activity import ActivityLog
 from app.models.document import Document
-from app.schemas.user import User as UserSchema, UserCreate, UserUpdate
-from app.schemas.case import Case as CaseSchema
+from app.schemas.user import User as UserSchema, UserCreate, UserUpdate, PaginatedUsers
+from app.schemas.case import Case as CaseSchema, PaginatedCases
 from app.schemas.assignment import CaseAssignmentCreate
 
 router = APIRouter()
 
-@router.get("/officers", response_model=List[UserSchema])
+@router.get("/officers", response_model=PaginatedUsers)
 async def read_officers(
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_admin),
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
 ) -> Any:
-    result = await db.execute(select(User).filter(User.role == "OFFICER").offset(skip).limit(limit))
-    return result.scalars().all()
+    filt = User.role == "OFFICER"
+    total = (await db.execute(select(func.count()).select_from(User).where(filt))).scalar_one()
+    result = await db.execute(
+        select(User).where(filt).order_by(User.username).offset(skip).limit(limit)
+    )
+    items = result.scalars().all()
+    return PaginatedUsers(items=items, total=total, skip=skip, limit=limit)
 
 @router.post("/officers", response_model=UserSchema)
 async def create_officer(
@@ -134,18 +139,24 @@ async def delete_officer(
 
 # ── Admin Case Management ─────────────────────────────────────────────────────
 
-@router.get("/cases", response_model=List[CaseSchema])
+@router.get("/cases", response_model=PaginatedCases)
 async def admin_list_cases(
     officer_id: Optional[UUID] = Query(None),
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_admin),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
 ) -> Any:
     """List all cases, optionally filtered by the officer who created them."""
-    query = select(Case)
+    count_stmt = select(func.count()).select_from(Case)
+    list_stmt = select(Case)
     if officer_id:
-        query = query.filter(Case.created_by == officer_id)
-    result = await db.execute(query.order_by(Case.created_at.desc()))
-    return result.scalars().all()
+        count_stmt = count_stmt.where(Case.created_by == officer_id)
+        list_stmt = list_stmt.where(Case.created_by == officer_id)
+    total = (await db.execute(count_stmt)).scalar_one()
+    result = await db.execute(list_stmt.order_by(Case.created_at.desc()).offset(skip).limit(limit))
+    items = result.scalars().all()
+    return PaginatedCases(items=items, total=total, skip=skip, limit=limit)
 
 
 @router.delete("/cases/{case_id}")

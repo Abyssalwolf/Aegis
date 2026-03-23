@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List
 from uuid import UUID
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict
@@ -40,3 +40,10 @@ class UserInDBBase(UserBase):
 
 class User(UserInDBBase):
     pass
+
+
+class PaginatedUsers(BaseModel):
+    items: List[User]
+    total: int
+    skip: int
+    limit: int

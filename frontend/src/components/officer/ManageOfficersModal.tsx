@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { UserMinus, UserPlus, Loader2 } from 'lucide-react';
+import { getApiV1Url } from '@/lib/api';
 
 interface Officer {
     id: string;
@@ -36,7 +37,7 @@ export function ManageOfficersModal({ isOpen, onClose, caseId, token }: ManageOf
         setError(null);
         try {
             // Fetch case details to find creator
-            const caseRes = await fetch(`http://localhost:8000/api/v1/cases/${caseId}`, {
+            const caseRes = await fetch(`${getApiV1Url()}/cases/${caseId}`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             if (caseRes.ok) {
@@ -45,7 +46,7 @@ export function ManageOfficersModal({ isOpen, onClose, caseId, token }: ManageOf
             }
 
             // Fetch currently assigned officers
-            const assignedRes = await fetch(`http://localhost:8000/api/v1/cases/${caseId}/officers`, {
+            const assignedRes = await fetch(`${getApiV1Url()}/cases/${caseId}/officers`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             if (assignedRes.ok) {
@@ -54,12 +55,13 @@ export function ManageOfficersModal({ isOpen, onClose, caseId, token }: ManageOf
             }
 
             // Fetch all active officers to populate dropdown
-            const rosterRes = await fetch('http://localhost:8000/api/v1/officer/list', {
+            const rosterRes = await fetch(`${getApiV1Url()}/officer/list?limit=500`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             if (rosterRes.ok) {
                 const rosterData = await rosterRes.json();
-                setAllActiveOfficers(rosterData);
+                const list = Array.isArray(rosterData) ? rosterData : (rosterData.items ?? []);
+                setAllActiveOfficers(list);
             }
         } catch (e: any) {
             setError("Failed to fetch roster data.");
@@ -87,7 +89,7 @@ export function ManageOfficersModal({ isOpen, onClose, caseId, token }: ManageOf
         setError(null);
 
         try {
-            const res = await fetch(`http://localhost:8000/api/v1/cases/${caseId}/officers`, {
+            const res = await fetch(`${getApiV1Url()}/cases/${caseId}/officers`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -115,7 +117,7 @@ export function ManageOfficersModal({ isOpen, onClose, caseId, token }: ManageOf
         setError(null);
 
         try {
-            const res = await fetch(`http://localhost:8000/api/v1/cases/${caseId}/officers/${officerId}`, {
+            const res = await fetch(`${getApiV1Url()}/cases/${caseId}/officers/${officerId}`, {
                 method: 'DELETE',
                 headers: {
                     'Authorization': `Bearer ${token}`

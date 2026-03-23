@@ -1,10 +1,10 @@
 import { getAccessToken } from '@/lib/auth';
 import { redirect } from 'next/navigation';
-import Link from 'next/link';
-import { Shield, LogOut, Menu } from 'lucide-react';
+import { Shield, LogOut } from 'lucide-react';
 import { logoutAction } from '@/lib/auth';
 import { UserProfileActions } from '@/components/auth/UserProfileActions';
 import { SidebarNav } from '@/components/navigation/SidebarNav';
+import { MobileDashboardHeader } from '@/components/navigation/MobileDashboardHeader';
 
 export default async function DashboardLayout({
     children,
@@ -20,16 +20,7 @@ export default async function DashboardLayout({
     // For aesthetics, we'll keep a generic top-bar/sidebar fusion
     return (
         <div className="min-h-screen bg-background text-foreground flex flex-col md:flex-row">
-            {/* Sidebar Mobile Navigation */}
-            <div className="md:hidden flex items-center justify-between p-4 border-b border-border bg-card">
-                <div className="flex items-center gap-2">
-                    <Shield className="w-6 h-6 text-primary" />
-                    <span className="font-semibold tracking-tight">AEGIS</span>
-                </div>
-                <button className="p-2 bg-muted/50 rounded-md text-muted-foreground">
-                    <Menu className="w-5 h-5" />
-                </button>
-            </div>
+            <MobileDashboardHeader token={token} />
 
             {/* Sidebar Desktop */}
             <aside className="hidden w-64 md:flex flex-col border-r border-border bg-card/50 backdrop-blur-xl">

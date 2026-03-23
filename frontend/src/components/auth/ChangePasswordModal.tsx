@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { logoutAction } from '@/lib/auth';
+import { getApiV1Url } from '@/lib/api';
 
 const passwordSchema = z.object({
     current_password: z.string().min(1, "Current password is required"),
@@ -52,7 +53,7 @@ export function ChangePasswordModal({ isOpen, onClose, token }: ChangePasswordMo
         setSuccessMsg(null);
 
         try {
-            const res = await fetch('http://localhost:8000/api/v1/auth/change-password', {
+            const res = await fetch(`${getApiV1Url()}/auth/change-password`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

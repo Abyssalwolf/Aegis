@@ -4,18 +4,13 @@ import { useState, useRef, useEffect } from 'react';
 import {
     Send, FileText, Loader2, UploadCloud, CheckCircle2,
     AlertCircle, Clock, ChevronDown, ChevronUp, BookOpen, X,
-    RefreshCw, Search, SlidersHorizontal, Sparkles,
+    RefreshCw, Search, SlidersHorizontal, Sparkles, Trash2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { getApiV1Url } from '@/lib/api';
+import { UploadEvidenceDialog, type EvidenceDocument } from '@/components/cases/UploadEvidenceDialog';
 
-interface Document {
-    id: string;
-    filename: string | null;
-    document_type: string;
-    ingest_status: string;
-    rag_document_id: string | null;
-    created_at: string;
-}
+type Document = EvidenceDocument;
 
 interface SourceReference {
     index: number;
@@ -24,11 +19,15 @@ interface SourceReference {
     page_number: number | null;
     relevance_score: number;
     chunk_type: string;
+    display_name?: string | null;
+    evidence_category?: string | null;
 }
 
 interface Message {
     role: 'user' | 'assistant';
     content: string;
+    /** Chain-of-thought from the model (Ollama thinking / tags), shown in a collapsible panel */
+    reasoning?: string | null;
     sources?: SourceReference[];
     chunks_retrieved?: number;
     isError?: boolean;
@@ -78,6 +77,30 @@ function StatusBadge({ status }: { status: string }) {
     );
 }
 
+function ReasoningPanel({ reasoning }: { reasoning: string }) {
+    const [open, setOpen] = useState(false);
+    return (
+        <div className="mt-2 border border-violet-500/25 rounded-lg overflow-hidden bg-violet-500/[0.07]">
+            <button
+                type="button"
+                onClick={() => setOpen((v) => !v)}
+                className="w-full flex items-center justify-between px-3 py-2 text-xs font-medium text-violet-300 hover:text-violet-200 hover:bg-violet-500/10 transition-colors"
+            >
+                <span className="flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                    Model reasoning
+                </span>
+                {open ? <ChevronUp className="w-3.5 h-3.5 shrink-0" /> : <ChevronDown className="w-3.5 h-3.5 shrink-0" />}
+            </button>
+            {open && (
+                <div className="px-3 py-2 border-t border-violet-500/20 text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap max-h-72 overflow-y-auto">
+                    {reasoning}
+                </div>
+            )}
+        </div>
+    );
+}
+
 function SourceCard({ sources }: { sources: SourceReference[] }) {
     const [open, setOpen] = useState(false);
     if (!sources.length) return null;
@@ -100,7 +123,9 @@ function SourceCard({ sources }: { sources: SourceReference[] }) {
                             <div className="flex items-center gap-2 mb-0.5">
                                 <span className="font-semibold text-primary">[{s.index}]</span>
                                 <span className="text-muted-foreground truncate max-w-[200px]">
-                                    {s.source_path.split('/').pop() || s.source_path}
+                                    {s.display_name?.trim()
+                                        || s.source_path.split('/').pop()
+                                        || s.source_path}
                                 </span>
                                 {s.page_number != null && (
                                     <span className="text-muted-foreground">p.{s.page_number}</span>
@@ -108,6 +133,7 @@ function SourceCard({ sources }: { sources: SourceReference[] }) {
                             </div>
                             <div className="text-muted-foreground">
                                 Score: {(s.relevance_score * 100).toFixed(0)}% · {s.chunk_type}
+                                {s.evidence_category ? ` · ${s.evidence_category}` : ''}
                             </div>
                         </div>
                     ))}
@@ -268,9 +294,9 @@ export default function ChatInterface({ caseId, token, initialDocuments, caseNam
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
-    const [uploading, setUploading] = useState(false);
+    const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
+    const [deletingId, setDeletingId] = useState<string | null>(null);
     const bottomRef = useRef<HTMLDivElement>(null);
-    const fileInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -280,18 +306,27 @@ export default function ChatInterface({ caseId, token, initialDocuments, caseNam
         const query = input.trim();
         if (!query || loading) return;
 
+        const chatHistory = messages
+            .filter((m) => !m.isError)
+            .map((m) => ({ role: m.role, content: m.content }));
+
         setInput('');
         setMessages(prev => [...prev, { role: 'user', content: query }]);
         setLoading(true);
 
         try {
-            const res = await fetch(`http://localhost:8000/api/v1/cases/${caseId}/query`, {
+            const res = await fetch(`${getApiV1Url()}/cases/${caseId}/query`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     Authorization: `Bearer ${token}`,
                 },
-                body: JSON.stringify({ query, top_k: 5 }),
+                body: JSON.stringify({
+                    query,
+                    top_k: 7,
+                    rewrite: true,
+                    chat_history: chatHistory,
+                }),
             });
 
             if (!res.ok) {
@@ -305,9 +340,14 @@ export default function ChatInterface({ caseId, token, initialDocuments, caseNam
             }
 
             const data = await res.json();
+            const reasoning =
+                typeof data.reasoning === 'string' && data.reasoning.trim()
+                    ? data.reasoning.trim()
+                    : undefined;
             setMessages(prev => [...prev, {
                 role: 'assistant',
                 content: data.answer,
+                reasoning,
                 sources: data.sources,
                 chunks_retrieved: data.chunks_retrieved,
             }]);
@@ -322,38 +362,47 @@ export default function ChatInterface({ caseId, token, initialDocuments, caseNam
         }
     };
 
-    const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
+    const clearChat = () => setMessages([]);
 
-        setUploading(true);
-        const form = new FormData();
-        form.append('file', file);
-        form.append('document_type', file.type || 'application/octet-stream');
-
+    const handleDeleteDocument = async (docId: string) => {
+        if (!window.confirm('Remove this file from the case and the search index? This cannot be undone.')) {
+            return;
+        }
+        setDeletingId(docId);
         try {
-            const res = await fetch(`http://localhost:8000/api/v1/cases/${caseId}/documents`, {
-                method: 'POST',
-                headers: { Authorization: `Bearer ${token}` },
-                body: form,
-            });
-
-            if (res.ok) {
-                const newDoc: Document = await res.json();
-                setDocuments(prev => [newDoc, ...prev]);
+            const res = await fetch(
+                `${getApiV1Url()}/cases/${caseId}/documents/${docId}`,
+                {
+                    method: 'DELETE',
+                    headers: { Authorization: `Bearer ${token}` },
+                },
+            );
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                const msg =
+                    typeof err.detail === 'string'
+                        ? err.detail
+                        : `Delete failed (${res.status})`;
+                window.alert(msg);
+                return;
             }
+            setDocuments((prev) => prev.filter((d) => d.id !== docId));
         } catch {
-            // silently fail; user can retry
+            window.alert('Could not reach the server.');
         } finally {
-            setUploading(false);
-            if (fileInputRef.current) fileInputRef.current.value = '';
+            setDeletingId(null);
         }
     };
 
-    const clearChat = () => setMessages([]);
-
     return (
         <div className="flex h-[calc(100vh-12rem)] gap-4">
+            <UploadEvidenceDialog
+                open={uploadDialogOpen}
+                onOpenChange={setUploadDialogOpen}
+                caseId={caseId}
+                token={token}
+                onUploaded={(doc) => setDocuments((prev) => [doc, ...prev])}
+            />
             {/* Left Panel — Documents */}
             <div className="w-72 shrink-0 flex flex-col gap-3">
                 <div className="bg-card/50 backdrop-blur-md border border-border rounded-xl p-4 flex flex-col gap-3 h-full">
@@ -362,37 +411,25 @@ export default function ChatInterface({ caseId, token, initialDocuments, caseNam
                             <FileText className="w-4 h-4 text-primary" />
                             Evidence Files
                         </h2>
-                        <input
-                            ref={fileInputRef}
-                            type="file"
-                            accept=".pdf,.png,.jpg,.jpeg,.tiff,.bmp,.webp"
-                            className="hidden"
-                            onChange={handleUpload}
-                        />
                         <Button
                             variant="ghost"
-                            size="sm"
                             className="h-7 w-7 p-0"
                             title="Upload document"
-                            onClick={() => fileInputRef.current?.click()}
-                            disabled={uploading}
+                            onClick={() => setUploadDialogOpen(true)}
                         >
-                            {uploading ? (
-                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            ) : (
-                                <UploadCloud className="w-3.5 h-3.5" />
-                            )}
+                            <UploadCloud className="w-3.5 h-3.5" />
                         </Button>
                     </div>
 
                     <div className="flex-1 overflow-y-auto space-y-2 pr-0.5">
                         {documents.length === 0 && (
                             <button
-                                onClick={() => fileInputRef.current?.click()}
+                                type="button"
+                                onClick={() => setUploadDialogOpen(true)}
                                 className="w-full flex flex-col items-center justify-center p-6 border-2 border-dashed border-border rounded-lg text-center hover:border-primary/50 hover:bg-primary/5 transition-colors group"
                             >
                                 <UploadCloud className="w-7 h-7 text-muted-foreground group-hover:text-primary mb-2 transition-colors" />
-                                <span className="text-xs text-muted-foreground">Upload a PDF or image to begin</span>
+                                <span className="text-xs text-muted-foreground">Click to upload a PDF or image</span>
                             </button>
                         )}
                         {documents.map((doc) => (
@@ -400,12 +437,34 @@ export default function ChatInterface({ caseId, token, initialDocuments, caseNam
                                 key={doc.id}
                                 className="p-3 rounded-lg border border-border bg-background/60 space-y-1.5"
                             >
-                                <div className="flex items-start gap-2">
-                                    <FileText className="w-4 h-4 text-primary mt-0.5 shrink-0" />
-                                    <span className="text-xs font-medium leading-snug break-all line-clamp-2">
-                                        {doc.filename || doc.document_type}
-                                    </span>
+                                <div className="flex items-start justify-between gap-1">
+                                    <div className="flex items-start gap-2 min-w-0">
+                                        <FileText className="w-4 h-4 text-primary mt-0.5 shrink-0" />
+                                        <span className="text-xs font-medium leading-snug break-all line-clamp-2">
+                                            {doc.display_name?.trim()
+                                                || doc.filename
+                                                || doc.document_type}
+                                        </span>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        title="Remove document"
+                                        onClick={() => handleDeleteDocument(doc.id)}
+                                        disabled={deletingId === doc.id}
+                                        className="shrink-0 p-1 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50"
+                                    >
+                                        {deletingId === doc.id ? (
+                                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                        ) : (
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                        )}
+                                    </button>
                                 </div>
+                                {doc.evidence_category && (
+                                    <p className="text-[10px] text-muted-foreground capitalize">
+                                        {doc.evidence_category.replace(/_/g, ' ')}
+                                    </p>
+                                )}
                                 <div className="flex items-center justify-between">
                                     <StatusBadge status={doc.ingest_status} />
                                     <span className="text-[10px] text-muted-foreground">
@@ -431,7 +490,7 @@ export default function ChatInterface({ caseId, token, initialDocuments, caseNam
                         <h2 className="text-sm font-semibold text-foreground truncate max-w-[360px]">{caseName}</h2>
                     </div>
                     {messages.length > 0 && (
-                        <Button variant="ghost" size="sm" className="h-7 gap-1.5 text-xs" onClick={clearChat}>
+                        <Button variant="ghost" className="h-7 gap-1.5 text-xs" onClick={clearChat}>
                             <X className="w-3.5 h-3.5" />
                             Clear
                         </Button>
@@ -482,6 +541,9 @@ export default function ChatInterface({ caseId, token, initialDocuments, caseNam
                                 }`}
                             >
                                 <p className="whitespace-pre-wrap">{renderContent(msg.content)}</p>
+                                {msg.role === 'assistant' && msg.reasoning && !msg.isError && (
+                                    <ReasoningPanel reasoning={msg.reasoning} />
+                                )}
                                 {msg.sources && <SourceCard sources={msg.sources} />}
                             </div>
                         </div>
@@ -508,7 +570,6 @@ export default function ChatInterface({ caseId, token, initialDocuments, caseNam
                         />
                         <Button
                             type="submit"
-                            size="sm"
                             className="h-10 w-10 p-0 rounded-xl shrink-0"
                             disabled={!input.trim() || loading}
                         >

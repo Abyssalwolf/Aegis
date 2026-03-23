@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { AlertTriangle, UserMinus } from 'lucide-react';
+import { getApiV1Url } from '@/lib/api';
 
 interface Officer {
     id: string;
@@ -44,13 +45,14 @@ export function CaseSettingsModal({ isOpen, onClose, caseId, caseTitle, token }:
 
     const fetchOfficers = async () => {
         try {
-            const res = await fetch('http://localhost:8000/api/v1/officer/list', {
+            const res = await fetch(`${getApiV1Url()}/officer/list?limit=500`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             if (res.ok) {
                 const data = await res.json();
+                const list = Array.isArray(data) ? data : (data.items ?? []);
                 // Filter officers to only those with clearance >= 4
-                setOfficers(data.filter((o: Officer) => (o.clearance_level || 0) >= 4));
+                setOfficers(list.filter((o: Officer) => (o.clearance_level || 0) >= 4));
             }
         } catch (e) {
             console.error("Failed to fetch officers", e);
@@ -79,7 +81,7 @@ export function CaseSettingsModal({ isOpen, onClose, caseId, caseTitle, token }:
         setError(null);
 
         try {
-            const res = await fetch(`http://localhost:8000/api/v1/cases/${caseId}/transfer`, {
+            const res = await fetch(`${getApiV1Url()}/cases/${caseId}/transfer`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -112,7 +114,7 @@ export function CaseSettingsModal({ isOpen, onClose, caseId, caseTitle, token }:
         setError(null);
 
         try {
-            const res = await fetch(`http://localhost:8000/api/v1/cases/${caseId}`, {
+            const res = await fetch(`${getApiV1Url()}/cases/${caseId}`, {
                 method: 'DELETE',
                 headers: {
                     'Authorization': `Bearer ${token}`

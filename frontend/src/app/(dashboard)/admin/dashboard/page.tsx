@@ -8,8 +8,9 @@ import {
 } from 'lucide-react';
 import { OfficerModal } from '@/components/admin/OfficerModal';
 import { getAccessToken } from '@/lib/auth';
+import { getApiV1Url } from '@/lib/api';
 
-const API = 'http://localhost:8000/api/v1';
+const API = getApiV1Url();
 
 const STATUS_COLORS: Record<string, string> = {
     OPEN: 'text-blue-400 bg-blue-400/10',
@@ -69,7 +70,7 @@ export default function AdminDashboard() {
             if (!currentToken) throw new Error('No access token found');
             setToken(currentToken);
 
-            const res = await fetch(`${API}/admin/officers`, {
+            const res = await fetch(`${API}/admin/officers?limit=500`, {
                 headers: { Authorization: `Bearer ${currentToken}` },
                 cache: 'no-store',
             });
@@ -79,7 +80,8 @@ export default function AdminDashboard() {
                     ? 'Access Restricted: Only administrators can view this dashboard.'
                     : 'Failed to load officers. Is backend running?');
             } else {
-                setOfficers(await res.json());
+                const data = await res.json();
+                setOfficers(Array.isArray(data) ? data : (data.items ?? []));
                 setError(null);
             }
         } catch (err: any) {

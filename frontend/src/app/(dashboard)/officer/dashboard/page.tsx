@@ -1,15 +1,38 @@
 import { getAccessToken } from '@/lib/auth';
+import { getApiV1Url } from '@/lib/api';
 import { Shield, FileText, CheckCircle2 } from 'lucide-react';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { CreateCaseAction } from '@/components/officer/CreateCaseAction';
 
-export default async function OfficerDashboard() {
-    const token = await getAccessToken();
+const PAGE_SIZE = 12;
 
-    const profileRes = await fetch('http://localhost:8000/api/v1/officer/me', {
+function normalizeCasesPayload(raw: unknown): { items: unknown[]; total: number } {
+    if (Array.isArray(raw)) {
+        return { items: raw, total: raw.length };
+    }
+    if (raw && typeof raw === 'object' && 'items' in raw) {
+        const o = raw as { items?: unknown[]; total?: number };
+        const items = Array.isArray(o.items) ? o.items : [];
+        const total = typeof o.total === 'number' ? o.total : items.length;
+        return { items, total };
+    }
+    return { items: [], total: 0 };
+}
+
+export default async function OfficerDashboard({
+    searchParams,
+}: {
+    searchParams: Promise<{ page?: string }>;
+}) {
+    const token = await getAccessToken();
+    const sp = await searchParams;
+    const page = Math.max(1, parseInt(String(sp?.page || '1'), 10) || 1);
+    const skip = (page - 1) * PAGE_SIZE;
+
+    const profileRes = await fetch(`${getApiV1Url()}/officer/me`, {
         headers: { Authorization: `Bearer ${token}` },
-        cache: 'no-store'
+        cache: 'no-store',
     });
 
     if (!profileRes.ok) {
@@ -17,20 +40,34 @@ export default async function OfficerDashboard() {
         return <div className="text-destructive">Failed to load officer profile</div>;
     }
 
-    const casesRes = await fetch('http://localhost:8000/api/v1/officer/cases', {
-        headers: { Authorization: `Bearer ${token}` },
-        cache: 'no-store'
-    });
+    const casesRes = await fetch(
+        `${getApiV1Url()}/officer/cases?skip=${skip}&limit=${PAGE_SIZE}`,
+        {
+            headers: { Authorization: `Bearer ${token}` },
+            cache: 'no-store',
+        }
+    );
 
     const profile = await profileRes.json();
-    const cases = casesRes.ok ? await casesRes.json() : [];
+    const rawCases = casesRes.ok ? await casesRes.json() : {};
+    const { items: cases, total } = normalizeCasesPayload(rawCases);
+    const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
     return (
         <>
             <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight">Officer Dashboard</h1>
-                    <p className="text-muted-foreground mt-1">Welcome back, {profile.rank || 'Officer'} <span className="text-foreground font-medium">{profile.username}</span>.</p>
+                    <p className="text-muted-foreground mt-1">
+                        Welcome back, {profile.rank || 'Officer'}{' '}
+                        <span className="text-foreground font-medium">{profile.username}</span>.
+                    </p>
+                    {total > 0 && (
+                        <p className="text-xs text-muted-foreground mt-2">
+                            Showing {cases.length} of {total} case{total === 1 ? '' : 's'}
+                            {totalPages > 1 ? ` · page ${page} of ${totalPages}` : ''}
+                        </p>
+                    )}
                 </div>
 
                 <div className="flex flex-col sm:flex-row gap-3">
@@ -41,9 +78,7 @@ export default async function OfficerDashboard() {
                             Level {profile.clearance_level || 0}
                         </span>
                     </div>
-                    {(profile.clearance_level || 0) >= 4 && (
-                        <CreateCaseAction token={token || ''} />
-                    )}
+                    {(profile.clearance_level || 0) >= 4 && <CreateCaseAction token={token || ''} />}
                 </div>
             </div>
 
@@ -53,38 +88,85 @@ export default async function OfficerDashboard() {
                     Accessible Cases Dashboard
                 </h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-                    {cases.map((c: { id: string, title: string, description: string, status: string, required_clearance_level: number }) => (
-                        <Link href={`/cases/${c.id}`} key={c.id} className="group">
-                            <div className="bg-card/50 backdrop-blur-sm border border-border hover:border-primary/50 transition-all duration-300 rounded-xl p-5 shadow-sm hover:shadow-primary/10 hover:-translate-y-1 h-full flex flex-col relative overflow-hidden">
-                                <div className="absolute top-0 left-0 w-1 h-full bg-primary opacity-0 group-hover:opacity-100 transition-opacity" />
-                                <div className="flex justify-between items-start mb-4">
-                                    <span className="inline-flex items-center px-2 py-1 rounded text-[10px] font-bold bg-secondary text-secondary-foreground uppercase tracking-widest cursor-default">
-                                        Clearance L{c.required_clearance_level}
-                                    </span>
-                                    <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${c.status === 'OPEN' ? 'text-primary' : 'text-emerald-500'}`}>
-                                        <CheckCircle2 className="w-3.5 h-3.5" />
-                                        {c.status}
-                                    </span>
-                                </div>
-                                <h3 className="font-bold text-lg leading-tight mb-2 group-hover:text-primary transition-colors text-foreground">{c.title}</h3>
-                                <p className="text-sm text-muted-foreground line-clamp-2 flex-grow">{c.description}</p>
+                    {cases.map(
+                        (c: {
+                            id: string;
+                            title: string;
+                            description: string;
+                            status: string;
+                            required_clearance_level: number;
+                        }) => (
+                            <Link href={`/cases/${c.id}`} key={c.id} className="group">
+                                <div className="bg-card/50 backdrop-blur-sm border border-border hover:border-primary/50 transition-all duration-300 rounded-xl p-5 shadow-sm hover:shadow-primary/10 hover:-translate-y-1 h-full flex flex-col relative overflow-hidden">
+                                    <div className="absolute top-0 left-0 w-1 h-full bg-primary opacity-0 group-hover:opacity-100 transition-opacity" />
+                                    <div className="flex justify-between items-start mb-4">
+                                        <span className="inline-flex items-center px-2 py-1 rounded text-[10px] font-bold bg-secondary text-secondary-foreground uppercase tracking-widest cursor-default">
+                                            Clearance L{c.required_clearance_level}
+                                        </span>
+                                        <span
+                                            className={`inline-flex items-center gap-1.5 text-xs font-medium ${c.status === 'OPEN' ? 'text-primary' : 'text-emerald-500'}`}
+                                        >
+                                            <CheckCircle2 className="w-3.5 h-3.5" />
+                                            {c.status}
+                                        </span>
+                                    </div>
+                                    <h3 className="font-bold text-lg leading-tight mb-2 group-hover:text-primary transition-colors text-foreground">
+                                        {c.title}
+                                    </h3>
+                                    <p className="text-sm text-muted-foreground line-clamp-2 flex-grow">{c.description}</p>
 
-                                <div className="mt-5 pt-4 border-t border-border flex justify-between items-center text-xs text-muted-foreground font-medium">
-                                    <span className="font-mono">ID: {c.id.substring(0, 8).toUpperCase()}</span>
-                                    <span className="text-primary opacity-0 group-hover:opacity-100 transition-opacity translate-x-1 group-hover:translate-x-0">View Details &rarr;</span>
+                                    <div className="mt-5 pt-4 border-t border-border flex justify-between items-center text-xs text-muted-foreground font-medium">
+                                        <span className="font-mono">ID: {c.id.substring(0, 8).toUpperCase()}</span>
+                                        <span className="text-primary opacity-0 group-hover:opacity-100 transition-opacity translate-x-1 group-hover:translate-x-0">
+                                            View Details &rarr;
+                                        </span>
+                                    </div>
                                 </div>
-                            </div>
-                        </Link>
-                    ))}
+                            </Link>
+                        )
+                    )}
                 </div>
                 {cases.length === 0 && (
                     <div className="p-16 text-center bg-card/30 border border-dashed border-border/50 rounded-2xl">
                         <Shield className="w-16 h-16 text-muted-foreground mx-auto mb-4 opacity-10" />
                         <h3 className="text-lg font-medium text-foreground">No Accessible Cases</h3>
-                        <p className="text-sm text-muted-foreground mt-2 max-w-sm mx-auto">You have not been assigned any cases, or your clearance limit is too low to view restricted operations.</p>
+                        <p className="text-sm text-muted-foreground mt-2 max-w-sm mx-auto">
+                            You have not been assigned any cases, or your clearance limit is too low to view restricted operations.
+                        </p>
+                    </div>
+                )}
+                {totalPages > 1 && (
+                    <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
+                        {page > 1 ? (
+                            <Link
+                                href={`/officer/dashboard?page=${page - 1}`}
+                                className="text-sm px-4 py-2 rounded-md border border-border hover:bg-muted"
+                            >
+                                Previous
+                            </Link>
+                        ) : (
+                            <span className="text-sm px-4 py-2 rounded-md border border-border opacity-40 cursor-not-allowed">
+                                Previous
+                            </span>
+                        )}
+                        <span className="text-sm text-muted-foreground">
+                            Page {page} / {totalPages}
+                        </span>
+                        {page < totalPages ? (
+                            <Link
+                                href={`/officer/dashboard?page=${page + 1}`}
+                                className="text-sm px-4 py-2 rounded-md border border-border hover:bg-muted"
+                            >
+                                Next
+                            </Link>
+                        ) : (
+                            <span className="text-sm px-4 py-2 rounded-md border border-border opacity-40 cursor-not-allowed">
+                                Next
+                            </span>
+                        )}
                     </div>
                 )}
             </div>
         </>
-    )
+    );
 }

@@ -2,13 +2,13 @@
 RAG query proxy endpoint.
 POST /cases/{case_id}/query  — proxies to the RAG service, scoped to the case.
 """
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 from uuid import UUID
 import logging
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -22,10 +22,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class QueryRequest(BaseModel):
     query: str
-    top_k: int = 5
+    top_k: int = 7
     rewrite: bool = True
+    chat_history: List[ChatMessage] = Field(default_factory=list)
 
 
 class SourceReference(BaseModel):
@@ -36,11 +42,14 @@ class SourceReference(BaseModel):
     case_id: Optional[str] = None
     relevance_score: float
     chunk_type: str
+    display_name: Optional[str] = None
+    evidence_category: Optional[str] = None
 
 
 class QueryResponse(BaseModel):
     query: str
     answer: str
+    reasoning: Optional[str] = None
     queries_used: List[str]
     sources: List[SourceReference]
     chunks_retrieved: int
@@ -76,6 +85,7 @@ async def query_case_documents(
                     "top_k": body.top_k,
                     "rewrite": body.rewrite,
                     "stream": False,
+                    "chat_history": [m.model_dump() for m in body.chat_history],
                 },
             )
             response.raise_for_status()

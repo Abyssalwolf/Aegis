@@ -1,4 +1,5 @@
 import { getAccessToken } from '@/lib/auth';
+import { getApiV1Url } from '@/lib/api';
 import { MessageSquare, ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
 import ChatInterface from '@/components/cases/ChatInterface';
@@ -8,7 +9,7 @@ export default async function ChatPage({ params }: { params: Promise<{ id: strin
     const token = await getAccessToken();
 
     // Fetch case details (for the title shown in the chat header)
-    const caseRes = await fetch(`http://localhost:8000/api/v1/cases/${id}`, {
+    const caseRes = await fetch(`${getApiV1Url()}/cases/${id}`, {
         headers: { Authorization: `Bearer ${token}` },
         cache: 'no-store',
     });
@@ -24,7 +25,7 @@ export default async function ChatPage({ params }: { params: Promise<{ id: strin
     const caseData = await caseRes.json();
 
     // Pre-fetch documents so the sidebar shows immediately without a client-side waterfall
-    const docsRes = await fetch(`http://localhost:8000/api/v1/cases/${id}/documents`, {
+    const docsRes = await fetch(`${getApiV1Url()}/cases/${id}/documents`, {
         headers: { Authorization: `Bearer ${token}` },
         cache: 'no-store',
     });

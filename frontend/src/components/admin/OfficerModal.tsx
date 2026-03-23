@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { getApiV1Url } from '@/lib/api';
 
 // Map of standard ranks to their clearance levels
 const RANK_CLEARANCE_MAP: Record<string, number> = {
@@ -111,8 +112,8 @@ export function OfficerModal({ isOpen, onClose, onSave, officer, token }: Office
         setError(null);
 
         const endpoint = isEditMode
-            ? `http://localhost:8000/api/v1/admin/officers/${officer.id}`
-            : 'http://localhost:8000/api/v1/admin/officers';
+            ? `${getApiV1Url()}/admin/officers/${officer.id}`
+            : `${getApiV1Url()}/admin/officers`;
 
         const method = isEditMode ? 'PATCH' : 'POST';
 

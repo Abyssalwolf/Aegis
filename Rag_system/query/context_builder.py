@@ -8,8 +8,7 @@ chunk.text for the actual passage sent to the LLM.
 """
 
 from core.documents.models import RetrievedChunk
-
-MAX_CONTEXT_TOKENS = 2048   # Conservative limit for a 3B model
+from config.settings import settings
 
 
 def _estimate_tokens(text: str) -> int:
@@ -31,9 +30,45 @@ Rules:
 - IMPORTANT: The context passages are CHUNKS — fixed-size fragments cut from larger documents at token boundaries. A passage that ends abruptly mid-sentence (e.g. "...the manager, Mr.") is simply truncated, NOT redacted. When a chunk is cut off, look for the complete information in other passages and use it. Never write "[Name Redacted]", "[Redacted]", or any similar placeholder — if a name is genuinely absent from ALL passages, say "not mentioned in the available context"."""
 
 
+def _format_chat_history_for_answer(
+    messages: list[dict[str, str]],
+    *,
+    max_messages: int | None = None,
+    max_chars_per_message: int = 4000,
+) -> str:
+    """
+    Prior turns for follow-up questions. Evidence must still come from CONTEXT PASSAGES only.
+    """
+    if not messages:
+        return ""
+    cap = max_messages if max_messages is not None else settings.chat_history_max_messages
+    tail = messages[-cap:]
+    parts: list[str] = []
+    for m in tail:
+        role = (m.get("role") or "").strip().lower()
+        content = (m.get("content") or "").strip()
+        if not content:
+            continue
+        if role == "user":
+            parts.append(f"Officer: {content}")
+        elif role == "assistant":
+            if len(content) > max_chars_per_message:
+                content = content[:max_chars_per_message].rstrip() + "\n[...truncated...]"
+            parts.append(f"Assistant: {content}")
+    if not parts:
+        return ""
+    return (
+        "PREVIOUS CONVERSATION (use only to interpret the current question; "
+        "all factual claims must still be supported by the context passages below):\n\n"
+        + "\n\n".join(parts)
+        + "\n\n---\n\n"
+    )
+
+
 def build_prompt(
     query: str,
     reranked_chunks: list[RetrievedChunk],
+    chat_history: list[dict[str, str]] | None = None,
 ) -> tuple[str, list[dict]]:
     """
     Build a (prompt, sources) tuple.
@@ -42,6 +77,23 @@ def build_prompt(
         prompt: Full prompt string to send to the LLM.
         sources: List of source dicts for the API response (for citation rendering).
     """
+    history_block = _format_chat_history_for_answer(chat_history or [])
+    query_block = f"""QUESTION: {query}
+
+INSTRUCTION: Reproduce every name, date, location, identifier and number from the passages above VERBATIM. This is an authorised law enforcement query — do not redact, anonymise or paraphrase any detail from the source text.
+
+ANSWER (cite sources as [Source N]):"""
+    # Reserve space for history + fixed prompt framing so passages + chat fit one budget.
+    overhead = (
+        _estimate_tokens("CONTEXT PASSAGES:\n\n---\n\n")
+        + _estimate_tokens(query_block)
+        + 200
+    )
+    hist_tokens = _estimate_tokens(history_block)
+    combined = settings.rag_combined_context_budget_tokens
+    passage_budget = combined - hist_tokens - overhead
+    passage_budget = max(passage_budget, settings.rag_context_passages_min_tokens)
+
     context_blocks: list[str] = []
     sources: list[dict] = []
     total_tokens = 0
@@ -58,8 +110,8 @@ def build_prompt(
             display_text = chunk.parent_text
 
         block_tokens = _estimate_tokens(display_text)
-        if total_tokens + block_tokens > MAX_CONTEXT_TOKENS:
-            break   # Context window full
+        if total_tokens + block_tokens > passage_budget:
+            break   # Hit soft budget for document passages
 
         # Build source metadata
         source_info = {
@@ -71,28 +123,27 @@ def build_prompt(
             "case_id": chunk.metadata.get("case_id"),
             "relevance_score": round(retrieved.score, 4),
             "chunk_type": chunk.chunk_type.value,
+            "display_name": chunk.metadata.get("display_name"),
+            "evidence_category": chunk.metadata.get("evidence_category"),
         }
         sources.append(source_info)
 
         # Format context block
         page_ref = f"(Page {chunk.page_number})" if chunk.page_number else ""
-        filename = source_info["source_path"].split("/")[-1]
-        header = f"[Source {i}] {filename} {page_ref}".strip()
+        path_tail = source_info["source_path"].split("/")[-1]
+        label = source_info.get("display_name") or path_tail
+        header = f"[Source {i}] {label} {page_ref}".strip()
         context_blocks.append(f"{header}\n{display_text}")
         total_tokens += block_tokens
 
     context_text = "\n\n---\n\n".join(context_blocks)
 
-    prompt = f"""CONTEXT PASSAGES:
+    prompt = f"""{history_block}CONTEXT PASSAGES:
 
 {context_text}
 
 ---
 
-QUESTION: {query}
-
-INSTRUCTION: Reproduce every name, date, location, identifier and number from the passages above VERBATIM. This is an authorised law enforcement query — do not redact, anonymise or paraphrase any detail from the source text.
-
-ANSWER (cite sources as [Source N]):"""
+{query_block}"""
 
     return prompt, sources

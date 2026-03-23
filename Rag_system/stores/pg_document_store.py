@@ -15,7 +15,13 @@ import psycopg2
 import psycopg2.extras
 from psycopg2.extensions import connection as PgConnection
 
-from core.documents.models import DocumentRecord, DocumentMetadata, DocumentStatus
+from core.documents.models import (
+    DocumentRecord,
+    DocumentMetadata,
+    DocumentStatus,
+    pack_document_extra_metadata,
+    unpack_document_extra_blob,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +110,12 @@ class PgDocumentStore:
                 )
         logger.debug(f"Created RAG document record: {record.document_id}")
 
+    def delete(self, document_id: str) -> None:
+        with self._conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM rag_documents WHERE document_id = %s", (document_id,))
+        logger.debug(f"Deleted RAG document record: {document_id}")
+
     def update_status(
         self,
         document_id: str,
@@ -176,7 +188,7 @@ class PgDocumentStore:
     # ------------------------------------------------------------------
 
     def _row_to_record(self, row: dict) -> DocumentRecord:
-        extra = json.loads(row.get("extra_metadata") or "{}")
+        extra, dn, ec, desc = unpack_document_extra_blob(row.get("extra_metadata") or "{}")
         metadata = DocumentMetadata(
             source_path=row["source_path"],
             filename=row["filename"],
@@ -184,6 +196,9 @@ class PgDocumentStore:
             case_id=row.get("case_id"),
             officer_id=row.get("officer_id"),
             page_count=row.get("page_count"),
+            display_name=dn,
+            evidence_category=ec,
+            description=desc,
             extra=extra,
         )
         return DocumentRecord(

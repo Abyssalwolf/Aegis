@@ -5,7 +5,7 @@ Takes top-K retrieved chunks and reranks them using BAAI/bge-reranker-base.
 The cross-encoder sees the query and each passage together, producing a
 relevance score that's far more accurate than cosine similarity — at the
 cost of O(N) inference passes. We only run this on a small candidate set
-(top-50 from hybrid retrieval → rerank to top-5).
+(top-50 from hybrid retrieval → rerank to top-K, default 7).
 """
 
 import logging

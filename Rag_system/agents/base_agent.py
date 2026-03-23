@@ -1,8 +1,8 @@
 """
 BaseAgent — common logic for all 7 specialist document agents.
 
-Uses your existing Ollama LLM (via settings.ollama_base_url / ollama_model)
-instead of OpenAI. No external API key needed.
+LLM: :func:`core.generation.agent_chat.agent_llm_complete` → ``OllamaClient``
+(``LLM_BASE_URL`` OpenAI-compatible API when set, else Ollama).
 """
 
 from __future__ import annotations
@@ -10,10 +10,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from langchain_ollama import ChatOllama
-from langchain_core.messages import HumanMessage, SystemMessage
-
-from config.settings import settings
+from core.generation.agent_chat import agent_llm_complete
 from orchestration.graph.state import BlackboardMessage, InvestigationState
 from core.documents.manager import (
     read_full_memory,
@@ -22,14 +19,6 @@ from core.documents.manager import (
 )
 from orchestration.blackboard import post_finding
 from core.retrieval.agent_retriever import query_rag
-
-
-def _get_llm():
-    return ChatOllama(
-        base_url=settings.ollama_base_url,
-        model=settings.ollama_model,
-        temperature=0,
-    )
 
 
 # ── Extraction prompts per file type ─────────────────────────────────────────
@@ -251,21 +240,16 @@ class BaseAgent:
 
     def _extract(self, doc_text: str) -> dict[str, Any]:
         prompt = EXTRACTION_PROMPTS.get(self.file_type, "Extract key information as JSON.")
-        llm = _get_llm()
-        response = llm.invoke([
-            SystemMessage(content=prompt),
-            HumanMessage(content=doc_text[:6000]),
-        ])
+        content = agent_llm_complete(doc_text[:6000], system=prompt, temperature=0)
         try:
             # strip markdown fences if model adds them
-            content = response.content.strip()
             if content.startswith("```"):
                 content = content.split("```")[1]
                 if content.startswith("json"):
                     content = content[4:]
             return json.loads(content.strip())
         except json.JSONDecodeError:
-            return {"summary": response.content, "parse_error": True}
+            return {"summary": content, "parse_error": True}
 
     def _analyse(self, memory_md: str, doc_text: str,
                  extracted: dict[str, Any]) -> dict[str, Any]:
@@ -274,10 +258,8 @@ class BaseAgent:
             document=doc_text[:3000],
             extracted=json.dumps(extracted, indent=2),
         )
-        llm = _get_llm()
-        response = llm.invoke([HumanMessage(content=prompt)])
+        content = agent_llm_complete(prompt, system="", temperature=0)
         try:
-            content = response.content.strip()
             if content.startswith("```"):
                 content = content.split("```")[1]
                 if content.startswith("json"):
@@ -298,10 +280,9 @@ And this extracted data:
 
 Identify any new insights or inconsistencies.
 Return ONLY JSON: {{"inconsistencies": [], "insights": []}}"""
-        llm = _get_llm()
-        response = llm.invoke([HumanMessage(content=prompt)])
+        content = agent_llm_complete(prompt, system="", temperature=0)
         try:
-            return json.loads(response.content.strip())
+            return json.loads(content.strip())
         except json.JSONDecodeError:
             return {"inconsistencies": [], "insights": []}
 

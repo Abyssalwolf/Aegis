@@ -84,4 +84,6 @@ app.include_router(agents_router, prefix="/agents", tags=["Agents"])
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "model": settings.ollama_model}
+    model = (settings.llm_model or settings.ollama_model).strip() or "unknown"
+    backend = "openai_compatible" if (settings.llm_base_url or "").strip() else "ollama"
+    return {"status": "ok", "model": model, "llm_backend": backend}

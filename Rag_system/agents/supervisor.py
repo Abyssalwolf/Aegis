@@ -1,6 +1,6 @@
 """
 SupervisorAgent — reads the full blackboard and produces
-a consolidated investigation report using your local Ollama LLM.
+a consolidated investigation report (same LLM stack as RAG: LLM_BASE_URL or Ollama).
 """
 
 from __future__ import annotations
@@ -8,20 +8,9 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from langchain_ollama import ChatOllama
-from langchain_core.messages import HumanMessage, SystemMessage
-
-from config.settings import settings
 from orchestration.graph.state import InvestigationState
 from orchestration.blackboard import format_brief
-
-
-def _get_llm():
-    return ChatOllama(
-        base_url=settings.ollama_base_url,
-        model=settings.ollama_model,
-        temperature=0,
-    )
+from core.generation.agent_chat import agent_llm_complete
 
 
 SUPERVISOR_SYSTEM = """You are the Chief Investigating Officer supervising a criminal case.
@@ -69,13 +58,8 @@ class SupervisorAgent:
         }
 
     def _analyse(self, brief: str) -> dict[str, Any]:
-        llm = _get_llm()
-        response = llm.invoke([
-            SystemMessage(content=SUPERVISOR_SYSTEM),
-            HumanMessage(content=brief),
-        ])
+        content = agent_llm_complete(brief, system=SUPERVISOR_SYSTEM, temperature=0)
         try:
-            content = response.content.strip()
             if content.startswith("```"):
                 content = content.split("```")[1]
                 if content.startswith("json"):
@@ -83,7 +67,7 @@ class SupervisorAgent:
             return json.loads(content.strip())
         except json.JSONDecodeError:
             return {
-                "case_narrative": response.content,
+                "case_narrative": content,
                 "cross_inconsistencies": [],
                 "information_gaps": [],
                 "critical_leads": [],

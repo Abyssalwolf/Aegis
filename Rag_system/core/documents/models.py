@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 from datetime import datetime
+import json
 import uuid
 
 
@@ -28,7 +29,35 @@ class DocumentMetadata:
     case_id: Optional[str] = None           # Link to a police case
     officer_id: Optional[str] = None        # Who ingested this
     page_count: Optional[int] = None
+    # Optional labels from case-management upload (also stored in extra_metadata JSON)
+    display_name: Optional[str] = None
+    evidence_category: Optional[str] = None
+    description: Optional[str] = None
     extra: dict = field(default_factory=dict)
+
+
+def pack_document_extra_metadata(metadata: DocumentMetadata) -> str:
+    """Merge reserved upload fields into the JSON blob for SQLite/PG stores."""
+    d = dict(metadata.extra)
+    if metadata.display_name is not None:
+        d["display_name"] = metadata.display_name
+    if metadata.evidence_category is not None:
+        d["evidence_category"] = metadata.evidence_category
+    if metadata.description is not None:
+        d["description"] = metadata.description
+    return json.dumps(d)
+
+
+def unpack_document_extra_blob(blob: str) -> tuple[dict, Optional[str], Optional[str], Optional[str]]:
+    """Split stored JSON into extra dict + upload metadata fields."""
+    data = json.loads(blob or "{}")
+    if not isinstance(data, dict):
+        return {}, None, None, None
+    d = dict(data)
+    display_name = d.pop("display_name", None)
+    evidence_category = d.pop("evidence_category", None)
+    description = d.pop("description", None)
+    return d, display_name, evidence_category, description
 
 
 @dataclass

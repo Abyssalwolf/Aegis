@@ -60,15 +60,27 @@ class IngestionPipeline:
         case_id: Optional[str] = None,
         officer_id: Optional[str] = None,
         skip_if_exists: bool = True,
+        display_name: Optional[str] = None,
+        evidence_category: Optional[str] = None,
+        description: Optional[str] = None,
+        logical_source_path: Optional[str] = None,
     ) -> DocumentRecord:
         path = Path(file_path)
+        # Stable key for dedup + chunk metadata (e.g. real upload path while reading a temp file)
+        effective_source_path = (logical_source_path or "").strip() or str(path.resolve())
         suffix = path.suffix.lower()
 
-        # Deduplicate
-        if skip_if_exists and self.doc_store.exists_by_path(str(path)):
-            logger.info(f"File already ingested, skipping: {path.name}")
-            existing = [r for r in self.doc_store.list_all()
-                        if r.metadata.source_path == str(path)]
+        # Deduplicate (skips Qdrant upsert when the same logical file already completed)
+        if skip_if_exists and self.doc_store.exists_by_path(effective_source_path):
+            logger.info(
+                "File already ingested, skipping: %s",
+                Path(effective_source_path).name,
+            )
+            existing = [
+                r
+                for r in self.doc_store.list_all(limit=10_000, offset=0)
+                if r.metadata.source_path == effective_source_path
+            ]
             if existing:
                 return existing[0]
 
@@ -82,29 +94,46 @@ class IngestionPipeline:
         else:
             raise ValueError(f"Unsupported file type: {suffix}")
 
+        chunk_meta: dict[str, str] = {}
+        if display_name:
+            chunk_meta["display_name"] = display_name
+        if evidence_category:
+            chunk_meta["evidence_category"] = evidence_category
+
         # Create document record
         metadata = DocumentMetadata(
-            source_path=str(path),
-            filename=path.name,
+            source_path=effective_source_path,
+            filename=Path(effective_source_path).name,
             file_type=file_type,
             case_id=case_id,
             officer_id=officer_id,
+            display_name=display_name,
+            evidence_category=evidence_category,
+            description=description,
         )
         record = DocumentRecord(metadata=metadata, status=DocumentStatus.PROCESSING)
         self.doc_store.create(record)
+
+        cm: Optional[dict[str, str]] = chunk_meta or None
 
         try:
             chunks: list[Chunk] = []
 
             if file_type == "pdf":
-                chunks = self._process_pdf(path, record.document_id, case_id)
+                chunks = self._process_pdf(path, record.document_id, case_id, cm)
                 record.metadata.page_count = getattr(
                     self._last_pdf_result, "page_count", None
                 )
             elif file_type == "image":
-                chunks = self._process_image(path, record.document_id, case_id)
+                chunks = self._process_image(path, record.document_id, case_id, cm)
             elif file_type == "text":
-                chunks = self._process_text(path, record.document_id, case_id)
+                chunks = self._process_text(
+                    path,
+                    record.document_id,
+                    case_id,
+                    cm,
+                    source_path_for_chunks=effective_source_path,
+                )
 
             # Embed all chunks in one batch pass
             chunks = self._embed_chunks(chunks)
@@ -162,8 +191,25 @@ class IngestionPipeline:
     # Private helpers
     # ------------------------------------------------------------------
 
+    def _chunk_metadata(
+        self,
+        case_id: Optional[str],
+        source_path: str,
+        chunk_meta: Optional[dict[str, str]] = None,
+        **extra,
+    ) -> dict:
+        m: dict = {"case_id": case_id, "source_path": source_path}
+        if chunk_meta:
+            m.update(chunk_meta)
+        m.update(extra)
+        return m
+
     def _process_pdf(
-        self, path: Path, document_id: str, case_id: Optional[str]
+        self,
+        path: Path,
+        document_id: str,
+        case_id: Optional[str],
+        chunk_meta: Optional[dict[str, str]] = None,
     ) -> list[Chunk]:
         result = self.pdf_loader.load(path)
         self._last_pdf_result = result
@@ -177,6 +223,7 @@ class IngestionPipeline:
                 chunk_type=ChunkType.TEXT,
                 case_id=case_id,
                 source_path=str(path),
+                chunk_meta=chunk_meta,
             )
             chunks.extend(text_chunks)
 
@@ -195,18 +242,20 @@ class IngestionPipeline:
                         page_number=page_no,
                         chunk_index=len(chunks),
                         token_count=len(clean_img_text.split()),
-                        metadata={
-                            "case_id": case_id,
-                            "source_path": str(path),
-                            "image_label": label,
-                        },
+                        metadata=self._chunk_metadata(
+                            case_id, str(path), chunk_meta, image_label=label
+                        ),
                     )
                     chunks.append(img_chunk)
 
         return chunks
 
     def _process_image(
-        self, path: Path, document_id: str, case_id: Optional[str]
+        self,
+        path: Path,
+        document_id: str,
+        case_id: Optional[str],
+        chunk_meta: Optional[dict[str, str]] = None,
     ) -> list[Chunk]:
         result = self.image_loader.load_file(path)
         chunks: list[Chunk] = []
@@ -220,24 +269,33 @@ class IngestionPipeline:
                     chunk_type=ChunkType.IMAGE,
                     case_id=case_id,
                     source_path=str(path),
+                    chunk_meta=chunk_meta,
                 )
 
         return chunks
 
     def _process_text(
-        self, path: Path, document_id: str, case_id: Optional[str]
+        self,
+        path: Path,
+        document_id: str,
+        case_id: Optional[str],
+        chunk_meta: Optional[dict[str, str]] = None,
+        *,
+        source_path_for_chunks: Optional[str] = None,
     ) -> list[Chunk]:
         """Process plain text and markdown files."""
         text = path.read_text(encoding="utf-8", errors="replace")
         clean_text = self.cleaner.clean(text)
         if not clean_text:
             return []
+        sp = (source_path_for_chunks or "").strip() or str(path)
         return self._text_to_chunks(
             clean_text,
             document_id=document_id,
             chunk_type=ChunkType.TEXT,
             case_id=case_id,
-            source_path=str(path),
+            source_path=sp,
+            chunk_meta=chunk_meta,
         )
 
     def _text_to_chunks(
@@ -247,6 +305,7 @@ class IngestionPipeline:
         chunk_type: ChunkType,
         case_id: Optional[str],
         source_path: str,
+        chunk_meta: Optional[dict[str, str]] = None,
     ) -> list[Chunk]:
         semantic_chunks = self.chunker.chunk(text)
         chunks: list[Chunk] = []
@@ -259,10 +318,7 @@ class IngestionPipeline:
                 chunk_index=i,
                 token_count=sc.token_count,
                 parent_text=sc.parent_text,
-                metadata={
-                    "case_id": case_id,
-                    "source_path": source_path,
-                },
+                metadata=self._chunk_metadata(case_id, source_path, chunk_meta),
             )
             chunks.append(chunk)
 

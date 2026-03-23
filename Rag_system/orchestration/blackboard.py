@@ -1,13 +1,14 @@
 import json
 from datetime import datetime
 from typing import Iterator
+
 import redis
 
-redis_client = redis.Redis(
-    host="localhost",
-    port=6379,
-    db=0,
-    decode_responses=True
+from config.settings import settings
+
+redis_client = redis.from_url(
+    settings.redis_url,
+    decode_responses=True,
 )
 
 
@@ -137,7 +138,7 @@ def subscribe_to_case(case_id: int) -> Iterator[dict]:
     Used by the SSE endpoint so the dashboard updates in real time.
     Run in a background thread.
     """
-    r = redis.Redis(host="localhost", port=6379, db=0, decode_responses=True)
+    r = redis.from_url(settings.redis_url, decode_responses=True)
     ps = r.pubsub()
     ps.subscribe(f"blackboard:{case_id}")
     for raw in ps.listen():

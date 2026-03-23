@@ -119,19 +119,12 @@ def classify_by_llm(text: str) -> tuple[FILE_TYPE | None, float, str]:
     Falls back to ("fir", 0.5, "unknown") on error.
     """
     import json
-    from langchain_ollama import ChatOllama
-    from langchain_core.messages import HumanMessage
-    from config.settings import settings
 
-    llm = ChatOllama(
-        base_url=settings.ollama_base_url,
-        model=settings.ollama_model,
-        temperature=0,
-    )
+    from core.generation.agent_chat import agent_llm_complete
+
     prompt = _LLM_PROMPT.format(text=text[:2000])
     try:
-        response = llm.invoke([HumanMessage(content=prompt)])
-        content = response.content.strip()
+        content = agent_llm_complete(prompt, system="", temperature=0)
         if content.startswith("```"):
             content = content.split("```")[1]
             if content.startswith("json"):

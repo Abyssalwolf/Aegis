@@ -41,16 +41,23 @@ def process_document(self, case_id: int, file_path: str,
 
         file_content = extract_text(file_path)
         if not file_content.strip():
+            set_case_status(case_id, "error")
             return {"case_id": case_id, "status": "error",
                     "error": "Could not extract text from file."}
 
-        classification = classify_document(
-            text=file_content,
-            stated_type=stated_file_type,
-        )
-        file_type = classification["file_type"]
-        logger.info(f"[{case_id}] Classified as '{file_type}' "
-                    f"(conf: {classification['confidence']})")
+        # Unified upload always sends an explicit type — skip keyword/LLM auto-classify.
+        if stated_file_type:
+            file_type = stated_file_type
+            logger.info(f"[{case_id}] Using stated file_type '{file_type}' (no auto-classify)")
+        else:
+            classification = classify_document(
+                text=file_content,
+                stated_type=None,
+                use_llm_fallback=True,
+            )
+            file_type = classification["file_type"]
+            logger.info(f"[{case_id}] Classified as '{file_type}' "
+                        f"(conf: {classification['confidence']})")
 
         ingest_document(
             case_id=str(case_id),

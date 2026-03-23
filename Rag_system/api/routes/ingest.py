@@ -4,8 +4,10 @@ POST /ingest/file     — upload a single PDF or image
 POST /ingest/batch    — upload multiple files
 GET  /ingest/status/{document_id}
 GET  /ingest/documents
+DELETE /ingest/documents/{document_id}  — remove vectors + store row, rebuild BM25
 """
 
+import logging
 import tempfile
 import os
 from pathlib import Path
@@ -21,6 +23,15 @@ from config.settings import settings
 from api.shared_state import bm25, get_qdrant
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+def _optional_form_str(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    s = value.strip()
+    return s or None
+
 
 # Shared instances — loaded once per process
 _pipeline: Optional[IngestionPipeline] = None
@@ -68,6 +79,9 @@ async def ingest_file(
     file: UploadFile = File(...),
     case_id: Optional[str] = Form(default=None),
     officer_id: Optional[str] = Form(default=None),
+    display_name: Optional[str] = Form(default=None),
+    evidence_category: Optional[str] = Form(default=None),
+    description: Optional[str] = Form(default=None),
 ):
     """Upload and ingest a single PDF or image file."""
     if file.content_type not in SUPPORTED_TYPES:
@@ -95,6 +109,9 @@ async def ingest_file(
             file_path=tmp_path,
             case_id=case_id,
             officer_id=officer_id,
+            display_name=_optional_form_str(display_name),
+            evidence_category=_optional_form_str(evidence_category),
+            description=_optional_form_str(description),
         )
 
         # Rebuild BM25 from all Qdrant texts so the new document is immediately searchable.
@@ -175,6 +192,9 @@ def get_status(document_id: str):
     return {
         "document_id": record.document_id,
         "filename": record.metadata.filename,
+        "display_name": record.metadata.display_name,
+        "evidence_category": record.metadata.evidence_category,
+        "description": record.metadata.description,
         "status": record.status.value,
         "chunk_count": record.chunk_count,
         "case_id": record.metadata.case_id,
@@ -197,6 +217,8 @@ def list_documents(case_id: Optional[str] = None, limit: int = 50, offset: int =
             {
                 "document_id": r.document_id,
                 "filename": r.metadata.filename,
+                "display_name": r.metadata.display_name,
+                "evidence_category": r.metadata.evidence_category,
                 "status": r.status.value,
                 "chunk_count": r.chunk_count,
                 "case_id": r.metadata.case_id,
@@ -207,3 +229,27 @@ def list_documents(case_id: Optional[str] = None, limit: int = 50, offset: int =
         ],
         "total": len(records),
     }
+
+
+@router.delete("/documents/{document_id}")
+def delete_ingested_document(document_id: str):
+    """
+    Remove all Qdrant chunks and the document row, then rebuild BM25 from Qdrant.
+    """
+    qdrant = get_qdrant()
+    doc_store = get_doc_store()
+
+    record = doc_store.get(document_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Document not found in ingest store.")
+
+    qdrant.delete_document(document_id)
+    doc_store.delete(document_id)
+
+    try:
+        all_pairs = qdrant.get_all_texts()
+        bm25.build_index(all_pairs)
+    except Exception as exc:
+        logger.warning("BM25 rebuild after delete failed: %s", exc)
+
+    return {"ok": True, "document_id": document_id}

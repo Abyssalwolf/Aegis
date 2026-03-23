@@ -43,10 +43,14 @@ def ingest_document(
             tmp_path = tmp.name
 
         try:
+            # Stable path for dedup: Celery retries use a new temp file each time; without this,
+            # skip_if_exists never matches and Qdrant gets duplicate upserts.
+            logical = (metadata or {}).get("file_path") or f"agent_text:{case_id}:{doc_id}"
             pipeline.ingest_file(
                 file_path=tmp_path,
                 case_id=case_id,
                 officer_id=None,
+                logical_source_path=str(logical),
             )
             logger.info(f"[{case_id}] Ingested document {doc_id}")
         finally:

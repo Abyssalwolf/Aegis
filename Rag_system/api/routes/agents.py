@@ -10,7 +10,6 @@ import uuid
 from pathlib import Path
 from typing import Annotated, AsyncGenerator
 
-import aiofiles
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 
@@ -38,20 +37,20 @@ VALID_FILE_TYPES = {
 async def upload_document(
     case_id: int,
     file: Annotated[UploadFile, File()],
-    file_type: Annotated[str | None, Form()] = None,
-    auto_classify: Annotated[bool, Form()] = True,
+    file_type: Annotated[str, Form()],
 ):
-    if file_type and file_type not in VALID_FILE_TYPES:
+    if file_type not in VALID_FILE_TYPES:
         raise HTTPException(400, f"Invalid file_type. Valid: {sorted(VALID_FILE_TYPES)}")
 
     upload_dir = Path(settings.upload_dir)
     upload_dir.mkdir(parents=True, exist_ok=True)
 
     file_id = uuid.uuid4().hex[:8]
-    save_path = upload_dir / f"{case_id}_{file_type or 'auto'}_{file_id}_{file.filename}"
+    save_path = upload_dir / f"{case_id}_{file_type}_{file_id}_{file.filename}"
 
-    async with aiofiles.open(save_path, "wb") as out:
-        await out.write(await file.read())
+    # Sync disk write after async read — avoids aiofiles + default ThreadPoolExecutor,
+    # which can raise "Executor shutdown has been called" if uvicorn stops mid-request.
+    save_path.write_bytes(await file.read())
 
     from orchestration.tasks import process_document
     task = process_document.delay(
@@ -63,7 +62,7 @@ async def upload_document(
     return {
         "task_id": task.id,
         "case_id": case_id,
-        "file_type": file_type or "auto-detect",
+        "file_type": file_type,
         "filename": file.filename,
         "status": "queued",
         "poll_url": f"/agents/tasks/{task.id}",
@@ -81,8 +80,7 @@ async def classify_preview(case_id: int, file: Annotated[UploadFile, File()]):
     tmp = Path(settings.upload_dir) / f"tmp_{uuid.uuid4().hex}"
     Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
 
-    async with aiofiles.open(tmp, "wb") as f:
-        await f.write(content)
+    tmp.write_bytes(content)
 
     try:
         from ingestion.extractor import extract_text

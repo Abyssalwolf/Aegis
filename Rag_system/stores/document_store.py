@@ -4,7 +4,6 @@ Tracks every ingested document with its status, metadata, and chunk count.
 Provides an audit trail of what has been ingested and when.
 """
 
-import json
 import sqlite3
 import logging
 from pathlib import Path
@@ -13,7 +12,13 @@ from contextlib import contextmanager
 from typing import Optional
 
 from config.settings import settings
-from core.documents.models import DocumentRecord, DocumentMetadata, DocumentStatus
+from core.documents.models import (
+    DocumentRecord,
+    DocumentMetadata,
+    DocumentStatus,
+    pack_document_extra_metadata,
+    unpack_document_extra_blob,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -90,12 +95,17 @@ class DocumentStore:
                     record.chunk_count,
                     record.metadata.page_count,
                     record.error_message,
-                    json.dumps(record.metadata.extra),
+                    pack_document_extra_metadata(record.metadata),
                     record.created_at.isoformat(),
                     record.updated_at.isoformat(),
                 ),
             )
         logger.debug(f"Created document record: {record.document_id}")
+
+    def delete(self, document_id: str) -> None:
+        with self._conn() as conn:
+            conn.execute("DELETE FROM documents WHERE document_id = ?", (document_id,))
+        logger.debug(f"Deleted document record: {document_id}")
 
     def update_status(
         self,
@@ -161,7 +171,7 @@ class DocumentStore:
     # ------------------------------------------------------------------
 
     def _row_to_record(self, row: sqlite3.Row) -> DocumentRecord:
-        extra = json.loads(row["extra_metadata"] or "{}")
+        extra, dn, ec, desc = unpack_document_extra_blob(row["extra_metadata"] or "{}")
         metadata = DocumentMetadata(
             source_path=row["source_path"],
             filename=row["filename"],
@@ -169,6 +179,9 @@ class DocumentStore:
             case_id=row["case_id"],
             officer_id=row["officer_id"],
             page_count=row["page_count"],
+            display_name=dn,
+            evidence_category=ec,
+            description=desc,
             extra=extra,
         )
         return DocumentRecord(

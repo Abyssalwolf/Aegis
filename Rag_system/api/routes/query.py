@@ -7,10 +7,10 @@ Full pipeline per request:
 """
 
 import logging
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from config.settings import settings
 from core.retrieval.hybrid_retriever import HybridRetriever
@@ -68,12 +68,20 @@ def _get_llm() -> OllamaClient:
 
 # --- Request / Response models ---
 
+
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class QueryRequest(BaseModel):
     query: str
     case_id: Optional[str] = None
     top_k: int = settings.reranker_top_k
     rewrite: bool = True
     stream: bool = False
+    # Prior turns (omit or send [] after "clear chat"). Used for the answer prompt only.
+    chat_history: list[ChatMessage] = Field(default_factory=list)
 
 
 class SourceReference(BaseModel):
@@ -84,11 +92,14 @@ class SourceReference(BaseModel):
     case_id: Optional[str]
     relevance_score: float
     chunk_type: str
+    display_name: Optional[str] = None
+    evidence_category: Optional[str] = None
 
 
 class QueryResponse(BaseModel):
     query: str
     answer: str
+    reasoning: Optional[str] = None  # model chain-of-thought when enabled (Ollama think / tags)
     queries_used: list[str]
     sources: list[SourceReference]
     chunks_retrieved: int
@@ -104,6 +115,8 @@ async def query(request: QueryRequest):
     Returns a cited answer with source references.
     """
     logger.info(f"Query received: '{request.query}' (case_id={request.case_id})")
+
+    history_dicts = [m.model_dump() for m in request.chat_history]
 
     # 1. Query rewriting
     rewriter = _get_rewriter()
@@ -144,22 +157,28 @@ async def query(request: QueryRequest):
     logger.info(f"Reranked to {len(reranked)} chunks.")
 
     # 4. Build context + prompt
-    prompt, source_dicts = build_prompt(request.query, reranked)
+    prompt, source_dicts = build_prompt(
+        request.query,
+        reranked,
+        chat_history=history_dicts,
+    )
 
     # 5. Generate answer
     llm = _get_llm()
-    answer = llm.generate(
+    out = llm.generate(
         prompt=prompt,
         system=SYSTEM_PROMPT,
         temperature=0.1,
-        max_tokens=1024,
+        max_tokens=settings.llm_max_tokens,
+        include_reasoning=True,
     )
 
     sources = [SourceReference(**s) for s in source_dicts]
 
     return QueryResponse(
         query=request.query,
-        answer=answer,
+        answer=out.content,
+        reasoning=out.reasoning,
         queries_used=queries,
         sources=sources,
         chunks_retrieved=len(candidates),

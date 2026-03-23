@@ -97,7 +97,7 @@ User Query
     → Query Rewriter (Ollama qwen2.5:3b → 2 rewrites)
     → Hybrid Retriever (Qdrant dense + BM25 sparse, parallel)
     → RRF Fusion (merge ranked lists from all query variants)
-    → BGE Reranker (cross-encoder, top-50 → top-5)
+    → BGE Reranker (cross-encoder, top-50 → top-7 by default)
     → Context Builder (pack chunks with citations)
     → LLM (Ollama, grounded answer with [Source N] citations)
     → Response (answer + source list)
